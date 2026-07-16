@@ -1,0 +1,20 @@
+# Bundle original (a árvore de código já está versionada)
+files.zip
+
+# Config local do Claude Code
+.claude/settings.local.json
+
+# Estado/backups locais em runtime (ficam em ~/.local/state, mas por segurança)
+*.log
+work/
+backups/
+
+# Insumos de flash que o usuário coloca localmente (nunca versionar imagens)
+*.img
+*.tar
+*.tar.md5
+
+# Lixo de SO/editor
+.DS_Store
+*.swp
+*~

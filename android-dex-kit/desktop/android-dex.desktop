@@ -1,0 +1,32 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Android DEX
+GenericName=Desktop para Android
+Comment=Experiência desktop resiliente de um Android conectado (scrcpy + ADB)
+Comment[pt_BR]=Experiência desktop resiliente de um Android conectado (scrcpy + ADB)
+Exec=android-dex
+Icon=android-dex
+Terminal=false
+Categories=Utility;System;RemoteAccess;
+Keywords=android;scrcpy;adb;dex;mirror;espelhar;celular;
+StartupNotify=true
+X-GNOME-UsesNotifications=true
+
+Actions=Mirror;Wifi;Status;Stop;
+
+[Desktop Action Mirror]
+Name=Espelhar tela real
+Exec=android-dex --mirror
+
+[Desktop Action Wifi]
+Name=Conectar por Wi-Fi
+Exec=android-dex --wifi
+
+[Desktop Action Status]
+Name=Ver estado
+Exec=sh -c "android-dex --status; echo; read -p 'Enter para fechar...' _"
+
+[Desktop Action Stop]
+Name=Encerrar sessão
+Exec=android-dex --stop

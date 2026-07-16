@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Android DEX">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f2027"/>
+      <stop offset="0.55" stop-color="#0078D4"/>
+      <stop offset="1" stop-color="#3DDC84"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="url(#bg)"/>
+  <!-- monitor (desktop) -->
+  <rect x="24" y="30" width="80" height="52" rx="6" fill="#0b1c22" stroke="#eaf6ff" stroke-width="3"/>
+  <rect x="30" y="36" width="68" height="40" rx="3" fill="#0078D4" opacity="0.35"/>
+  <rect x="52" y="86" width="24" height="6" fill="#eaf6ff"/>
+  <rect x="42" y="92" width="44" height="6" rx="3" fill="#eaf6ff"/>
+  <!-- robô android -->
+  <g fill="#3DDC84">
+    <path d="M48 60a16 16 0 0 1 32 0z"/>
+    <rect x="48" y="62" width="32" height="18" rx="4"/>
+    <rect x="42" y="62" width="5" height="16" rx="2.5"/>
+    <rect x="81" y="62" width="5" height="16" rx="2.5"/>
+    <rect x="54" y="78" width="5" height="14" rx="2.5"/>
+    <rect x="69" y="78" width="5" height="14" rx="2.5"/>
+  </g>
+  <circle cx="57" cy="53" r="2.4" fill="#0b1c22"/>
+  <circle cx="71" cy="53" r="2.4" fill="#0b1c22"/>
+  <line x1="53" y1="44" x2="49" y2="39" stroke="#3DDC84" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="75" y1="44" x2="79" y2="39" stroke="#3DDC84" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

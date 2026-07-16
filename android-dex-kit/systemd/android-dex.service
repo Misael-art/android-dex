@@ -1,0 +1,24 @@
+[Unit]
+Description=Android DEX — sessão desktop resiliente para Android via scrcpy/ADB
+Documentation=https://github.com/Shrey113/Android-Dex
+# Só faz sentido dentro de uma sessão gráfica
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# --once desligado de propósito: o próprio android-dex já supervisiona e
+# reconecta; o Restart cobre falhas do processo inteiro (ex.: adb morto).
+ExecStart=%h/.local/bin/android-dex
+Restart=on-failure
+RestartSec=5
+# Não derrubar por picos de reconexão
+StartLimitIntervalSec=0
+# Encerramento limpo (o trap do script reverte tweaks e mata o scrcpy)
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Ambiente: garantir que ~/.local/bin esteja no PATH
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=graphical-session.target

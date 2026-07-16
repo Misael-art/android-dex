@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# android-dex — runtime resiliente para experiência desktop (DeX) de um Android
+#               conectado, sobre scrcpy + ADB. Sem root.
+#
+# Uso:
+#   android-dex                 # auto-detecta (USB e depois Wi-Fi salvo)
+#   android-dex --usb           # força USB
+#   android-dex --wifi          # força Wi-Fi (usa DEVICE_IP do config)
+#   android-dex 192.168.1.50    # conecta neste IP (porta 5555 assumida)
+#   android-dex 192.168.1.50:37000
+#   android-dex --mirror        # espelha a tela real em vez do modo DeX
+#   android-dex --once          # não fica reconectando (roda uma sessão)
+#   android-dex --status        # mostra estado atual e sai
+#   android-dex --stop          # encerra sessões em andamento
+#
+# Config: ~/.config/android-dex/config.env  (veja config.env.example)
+# Log:    ~/.local/state/android-dex/android-dex.log
+set -uo pipefail
+
+# --- localizar e carregar a biblioteca comum --------------------------------
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+for _cand in \
+  "$(dirname "$_self")/../lib/common.sh" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/android-dex/lib/common.sh" \
+  "/usr/local/share/android-dex/lib/common.sh"; do
+  if [ -f "$_cand" ]; then . "$_cand"; _COMMON_OK=1; break; fi
+done
+[ "${_COMMON_OK:-0}" = 1 ] || { echo "FATAL: common.sh não encontrado" >&2; exit 1; }
+
+adx_load_config
+
+# --- estado de execução -----------------------------------------------------
+SCRCPY_PID=""
+SHOULD_RUN=1
+ONCE=0
+TARGET_SERIAL=""       # serial resolvido para a sessão atual
+TWEAKS_APPLIED=0
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+usage() { sed -n '2,20p' "$_self" | sed 's/^# \{0,1\}//'; }
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --usb)     CONNECTION="usb" ;;
+      --wifi)    CONNECTION="wifi" ;;
+      --mirror)  MODE="mirror" ;;
+      --dex)     MODE="dex" ;;
+      --once)    ONCE=1; RECONNECT=0 ;;
+      --no-audio) AUDIO=0 ;;
+      --status)  cmd_status; exit 0 ;;
+      --stop)    cmd_stop;   exit 0 ;;
+      -h|--help) usage; exit 0 ;;
+      *:*[0-9])  DEVICE_IP="$1"; CONNECTION="wifi" ;;
+      *.*.*.*)   DEVICE_IP="$1:5555"; CONNECTION="wifi" ;;
+      *) log_warn "Argumento ignorado: $1" ;;
+    esac
+    shift
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Pré-checagens
+# ---------------------------------------------------------------------------
+preflight() {
+  have scrcpy || die "scrcpy não encontrado. Rode o install.sh do kit."
+  adb_ensure_server
+  local ver
+  ver="$(scrcpy --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
+  if [ -n "$ver" ] && [ "$MODE" = "dex" ] && ! version_ge "$ver" "3.0"; then
+    log_warn "scrcpy $ver não suporta modo DeX (--new-display, requer >= 3.0). Caindo para espelhamento."
+    MODE="mirror"
+  fi
+  log_info "scrcpy ${ver:-?} | modo=$MODE | conexão=$CONNECTION"
+}
+
+# ---------------------------------------------------------------------------
+# Resolução de dispositivo (a parte "resiliente")
+# ---------------------------------------------------------------------------
+
+# Tenta (re)conectar via Wi-Fi ao DEVICE_IP. Retorna 0 se online.
+wifi_try_connect() {
+  local ip="$1"
+  [ -n "$ip" ] || return 1
+  if adb_serial_online "$ip"; then return 0; fi
+  log_info "Conectando por Wi-Fi em $ip ..."
+  adb connect "$ip" >/dev/null 2>&1 || true
+  sleep 1
+  adb_serial_online "$ip"
+}
+
+# Descobre um serial utilizável conforme a política CONNECTION.
+# Ecoa o serial (stdout) e retorna 0; senão retorna 1.
+resolve_device() {
+  adb_ensure_server
+
+  # Serial explícito tem prioridade máxima.
+  if [ -n "$DEVICE_SERIAL" ]; then
+    if adb_serial_online "$DEVICE_SERIAL"; then echo "$DEVICE_SERIAL"; return 0; fi
+  fi
+
+  case "$CONNECTION" in
+    usb)
+      local s; s="$(adb_first_usb_serial)"
+      [ -n "$s" ] && { echo "$s"; return 0; }
+      ;;
+    wifi)
+      if wifi_try_connect "$DEVICE_IP"; then echo "$DEVICE_IP"; return 0; fi
+      # fallback: qualquer TCP já pareado
+      local t; t="$(adb_first_tcp_serial)"
+      [ -n "$t" ] && { echo "$t"; return 0; }
+      ;;
+    auto|*)
+      # 1) USB conectado
+      local s; s="$(adb_first_usb_serial)"
+      [ -n "$s" ] && { echo "$s"; return 0; }
+      # 2) IP salvo
+      if [ -n "$DEVICE_IP" ] && wifi_try_connect "$DEVICE_IP"; then echo "$DEVICE_IP"; return 0; fi
+      # 3) qualquer TCP online
+      local t; t="$(adb_first_tcp_serial)"
+      [ -n "$t" ] && { echo "$t"; return 0; }
+      ;;
+  esac
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Tweaks de "desktop mode" (janelas livres) — reversíveis
+# ---------------------------------------------------------------------------
+apply_desktop_tweaks() {
+  local s="$1"
+  [ "$ENABLE_FREEFORM_TWEAKS" = "1" ] || return 0
+  log_info "Aplicando ajustes de modo desktop (freeform)..."
+  adb -s "$s" shell settings put global enable_freeform_support 1 >/dev/null 2>&1 || true
+  adb -s "$s" shell settings put global force_desktop_mode_on_external_displays 1 >/dev/null 2>&1 || true
+  adb -s "$s" shell settings put global enable_non_resizable_multi_window 1 >/dev/null 2>&1 || true
+  TWEAKS_APPLIED=1
+}
+
+restore_desktop_tweaks() {
+  [ "$TWEAKS_APPLIED" = "1" ] || return 0
+  [ "$RESTORE_TWEAKS_ON_EXIT" = "1" ] || return 0
+  local s="$1"
+  log_info "Revertendo ajustes de modo desktop..."
+  adb -s "$s" shell settings delete global enable_freeform_support >/dev/null 2>&1 || true
+  adb -s "$s" shell settings delete global force_desktop_mode_on_external_displays >/dev/null 2>&1 || true
+  adb -s "$s" shell settings delete global enable_non_resizable_multi_window >/dev/null 2>&1 || true
+}
+
+# ---------------------------------------------------------------------------
+# Montagem dos argumentos do scrcpy
+# ---------------------------------------------------------------------------
+build_scrcpy_args() {
+  local s="$1"; SCRCPY_ARGS=()
+  SCRCPY_ARGS+=( -s "$s" )
+  SCRCPY_ARGS+=( --window-title "$WINDOW_TITLE" )
+  SCRCPY_ARGS+=( --max-fps "$MAX_FPS" --video-bit-rate "$VIDEO_BITRATE" )
+  [ "$STAY_AWAKE" = "1" ]      && SCRCPY_ARGS+=( --stay-awake )
+  [ "$AUDIO" = "1" ]          || SCRCPY_ARGS+=( --no-audio )
+  if [ "$MODE" = "dex" ]; then
+    SCRCPY_ARGS+=( --new-display="${DISPLAY_RES}/${DISPLAY_DPI}" )
+    # Ao fechar o display virtual, mover apps para a tela principal (não destruir):
+    SCRCPY_ARGS+=( --no-vd-destroy-content )
+    # Alguns aparelhos mostram UI quebrada; permitir desligar as decorações:
+    [ "$VD_SYSTEM_DECORATIONS" = "0" ] && SCRCPY_ARGS+=( --no-vd-system-decorations )
+    # Aparelhos sem launcher no display virtual: abrir um app/launcher direto:
+    [ -n "$START_APP" ] && SCRCPY_ARGS+=( --start-app="$START_APP" )
+  else
+    [ "$TURN_SCREEN_OFF" = "1" ] && SCRCPY_ARGS+=( --turn-screen-off )
+  fi
+  # args extras livres do usuário (divididos por espaço)
+  if [ -n "$EXTRA_ARGS" ]; then
+    # shellcheck disable=SC2206
+    local extra=( $EXTRA_ARGS ); SCRCPY_ARGS+=( "${extra[@]}" )
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Ciclo de sessão + supervisor
+# ---------------------------------------------------------------------------
+run_one_session() {
+  local s="$1"
+  build_scrcpy_args "$s"
+  log_ok "Iniciando sessão em $s"
+  log_info "scrcpy ${SCRCPY_ARGS[*]}"
+  scrcpy "${SCRCPY_ARGS[@]}" &
+  SCRCPY_PID=$!
+  echo "$SCRCPY_PID" > "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
+  wait "$SCRCPY_PID"
+  local rc=$?
+  SCRCPY_PID=""
+  rm -f "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
+  return $rc
+}
+
+supervisor() {
+  local attempt=0
+  while [ "$SHOULD_RUN" = "1" ]; do
+    if ! TARGET_SERIAL="$(resolve_device)"; then
+      if [ "$RECONNECT" != "1" ]; then
+        die "Nenhum dispositivo encontrado. Conecte via USB (com Depuração USB) ou configure DEVICE_IP."
+      fi
+      local d; d="$(adx_backoff "$attempt" "$BACKOFF_BASE" "$BACKOFF_CAP")"
+      log_warn "Sem dispositivo. Nova tentativa em ${d}s (tentativa $((attempt+1)))..."
+      sleep "$d"; attempt=$((attempt+1))
+      continue
+    fi
+
+    attempt=0
+    apply_desktop_tweaks "$TARGET_SERIAL"
+    run_one_session "$TARGET_SERIAL"
+    local rc=$?
+
+    if [ "$SHOULD_RUN" != "1" ]; then break; fi
+
+    if [ "$RECONNECT" != "1" ] || [ "$ONCE" = "1" ]; then
+      log_info "Sessão finalizada (rc=$rc)."
+      break
+    fi
+
+    # scrcpy saiu sozinho: cair para reconexão com backoff.
+    local d; d="$(adx_backoff "$attempt" "$BACKOFF_BASE" "$BACKOFF_CAP")"
+    log_warn "Sessão caiu (rc=$rc). Tentando recuperar em ${d}s..."
+    # se era Wi-Fi, forçar reconexão do transporte
+    if adx_is_tcp_serial "$TARGET_SERIAL"; then adb disconnect "$TARGET_SERIAL" >/dev/null 2>&1 || true; fi
+    sleep "$d"; attempt=$((attempt+1))
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Comandos auxiliares
+# ---------------------------------------------------------------------------
+cmd_status() {
+  adb_ensure_server
+  printf '%sAndroid-DEX — estado%s\n' "$C_BOLD" "$C_RESET"
+  printf '  config      : %s\n' "$ADX_CONFIG_FILE"
+  printf '  modo        : %s\n' "$MODE"
+  printf '  conexão     : %s\n' "$CONNECTION"
+  printf '  DEVICE_IP   : %s\n' "${DEVICE_IP:-<vazio>}"
+  printf '  dispositivos:\n'
+  adb devices -l 2>/dev/null | sed '1d;/^$/d' | sed 's/^/    /'
+  if [ -f "$ADX_STATE_DIR/scrcpy.pid" ] && kill -0 "$(cat "$ADX_STATE_DIR/scrcpy.pid")" 2>/dev/null; then
+    printf '  sessão      : %sativa (pid %s)%s\n' "$C_GREEN" "$(cat "$ADX_STATE_DIR/scrcpy.pid")" "$C_RESET"
+  else
+    printf '  sessão      : inativa\n'
+  fi
+}
+
+cmd_stop() {
+  local pidf="$ADX_STATE_DIR/scrcpy.pid"
+  if [ -f "$pidf" ]; then
+    local p; p="$(cat "$pidf")"
+    kill "$p" 2>/dev/null && log_ok "Sessão $p encerrada." || log_warn "Nada para encerrar."
+    rm -f "$pidf"
+  else
+    # fallback: mata qualquer scrcpy nosso
+    pkill -f 'scrcpy .*android-dex' 2>/dev/null && log_ok "Sessões encerradas." || log_warn "Nenhuma sessão ativa."
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Encerramento limpo
+# ---------------------------------------------------------------------------
+cleanup() {
+  SHOULD_RUN=0
+  if [ -n "$SCRCPY_PID" ] && kill -0 "$SCRCPY_PID" 2>/dev/null; then
+    kill "$SCRCPY_PID" 2>/dev/null || true
+    wait "$SCRCPY_PID" 2>/dev/null || true
+  fi
+  [ -n "$TARGET_SERIAL" ] && restore_desktop_tweaks "$TARGET_SERIAL"
+  rm -f "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
+  log_info "Encerrado."
+}
+trap cleanup INT TERM EXIT
+
+# ---------------------------------------------------------------------------
+main() {
+  parse_args "$@"
+  preflight
+  supervisor
+}
+main "$@"

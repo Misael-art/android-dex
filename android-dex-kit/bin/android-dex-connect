@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# android-dex-connect — assistente de conexão Wi-Fi (Depuração sem fio, Android 11+)
+#
+# Fluxo:
+#   1) Se houver USB conectado, oferece migrar para TCP/IP automaticamente (tcpip).
+#   2) Senão, guia o emparelhamento manual: "adb pair IP:PORTA" + código de 6 dígitos.
+#   3) Persiste o IP:porta de conexão no config para reconexão automática futura.
+#
+# Uso:
+#   android-dex-connect                 # interativo
+#   android-dex-connect --from-usb      # migra o USB atual para Wi-Fi
+#   android-dex-connect 192.168.1.50:37000 123456   # pair direto (IP:porta + código)
+set -uo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+for _cand in \
+  "$(dirname "$_self")/../lib/common.sh" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/android-dex/lib/common.sh" \
+  "/usr/local/share/android-dex/lib/common.sh"; do
+  [ -f "$_cand" ] && { . "$_cand"; _COMMON_OK=1; break; }
+done
+[ "${_COMMON_OK:-0}" = 1 ] || { echo "FATAL: common.sh não encontrado" >&2; exit 1; }
+
+adx_load_config
+adb_ensure_server
+
+persist_ip() {
+  local ip="$1"
+  mkdir -p "$ADX_CONFIG_DIR"
+  touch "$ADX_CONFIG_FILE"
+  if grep -q '^DEVICE_IP=' "$ADX_CONFIG_FILE" 2>/dev/null; then
+    sed -i "s|^DEVICE_IP=.*|DEVICE_IP=\"$ip\"|" "$ADX_CONFIG_FILE"
+  else
+    printf 'DEVICE_IP="%s"\n' "$ip" >> "$ADX_CONFIG_FILE"
+  fi
+  log_ok "IP salvo no config: $ip"
+}
+
+migrate_from_usb() {
+  local s; s="$(adb_first_usb_serial)"
+  [ -n "$s" ] || die "Nenhum dispositivo USB em estado 'device'. Conecte por cabo e autorize a depuração."
+  log_step "Migrando $s de USB para Wi-Fi"
+  local ip
+  ip="$(adb -s "$s" shell ip route 2>/dev/null | awk '/wlan0/ {print $9; exit}')"
+  [ -n "$ip" ] || ip="$(adb -s "$s" shell ip -f inet addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)"
+  [ -n "$ip" ] || die "Não consegui descobrir o IP Wi-Fi do aparelho. Verifique se o Wi-Fi está ligado."
+  log_info "IP do aparelho: $ip"
+  adb -s "$s" tcpip 5555 >/dev/null 2>&1 || die "Falha ao ativar modo TCP/IP no aparelho."
+  sleep 2
+  adb connect "$ip:5555" >/dev/null 2>&1 || true
+  sleep 1
+  if adb_serial_online "$ip:5555"; then
+    persist_ip "$ip:5555"
+    log_ok "Conectado por Wi-Fi em $ip:5555. Pode desconectar o cabo."
+  else
+    die "Conexão TCP falhou. Confira firewall/rede e tente novamente."
+  fi
+}
+
+pair_manual() {
+  local pair_addr="${1:-}" code="${2:-}"
+  cat >&2 <<'TXT'
+
+  Depuração sem fio (Android 11+):
+    No aparelho:  Configurações → Opções do desenvolvedor → Depuração sem fio
+    Toque em "Parear dispositivo com código de emparelhamento".
+    Anote o "Endereço IP e porta" e o "Código Wi-Fi" (6 dígitos).
+
+TXT
+  if [ -z "$pair_addr" ]; then
+    printf 'Endereço de emparelhamento (IP:PORTA): ' >&2; read -r pair_addr
+  fi
+  if [ -z "$code" ]; then
+    printf 'Código de 6 dígitos: ' >&2; read -r code
+  fi
+  [ -n "$pair_addr" ] && [ -n "$code" ] || die "IP:porta e código são obrigatórios."
+
+  log_step "Emparelhando com $pair_addr"
+  if adb pair "$pair_addr" "$code"; then
+    log_ok "Emparelhado."
+  else
+    die "Emparelhamento falhou. Verifique IP:porta e o código (eles mudam a cada abertura da tela)."
+  fi
+
+  # A porta de CONEXÃO é diferente da de emparelhamento — pedir/derivar.
+  local host connect_addr
+  host="${pair_addr%%:*}"
+  printf 'Endereço de CONEXÃO (IP:PORTA, veja no topo da tela de Depuração sem fio) [%s:5555]: ' "$host" >&2
+  read -r connect_addr
+  [ -n "$connect_addr" ] || connect_addr="$host:5555"
+
+  log_step "Conectando em $connect_addr"
+  adb connect "$connect_addr" >/dev/null 2>&1 || true
+  sleep 1
+  if adb_serial_online "$connect_addr"; then
+    persist_ip "$connect_addr"
+    log_ok "Pronto! Rode:  android-dex --wifi"
+  else
+    die "Não conectou em $connect_addr. Tente 'adb connect $connect_addr' manualmente."
+  fi
+}
+
+main() {
+  case "${1:-}" in
+    --from-usb) migrate_from_usb ;;
+    -h|--help)  sed -n '2,15p' "$_self" | sed 's/^# \{0,1\}//' ;;
+    *:*[0-9])   pair_manual "$1" "${2:-}" ;;
+    "")
+      if [ -n "$(adb_first_usb_serial)" ]; then
+        log_info "Dispositivo USB detectado."
+        printf 'Migrar do USB para Wi-Fi automaticamente? [S/n] ' >&2; read -r ans
+        case "${ans:-S}" in [Nn]*) pair_manual ;; *) migrate_from_usb ;; esac
+      else
+        pair_manual
+      fi
+      ;;
+    *) die "Argumento inválido: $1 (use IP:PORTA ou --from-usb)" ;;
+  esac
+}
+main "$@"

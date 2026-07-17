@@ -39,7 +39,100 @@ adxf_load_config() {
   : "${BACKUP_DIR:=$XDG_STATE_HOME/$ADXF_APP_NAME/backups}"
   : "${WORK_DIR:=$XDG_STATE_HOME/$ADXF_APP_NAME/work}"
   : "${MAGISK_APK:=}"               # caminho p/ Magisk-vXX.apk (opcional)
+  : "${TRUSTED_KEYS_DIR:=$ADXF_CONFIG_DIR/trusted-keys}"
+  : "${FLASH_DEVICE_SERIAL:=}"       # obrigatório quando houver mais de um device
   mkdir -p "$BACKUP_DIR" "$WORK_DIR" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Descritor autenticado de firmware (somente leitura / fail-closed)
+# ---------------------------------------------------------------------------
+firmware_manifest_get() {
+  local manifest="$1" key="$2"
+  awk -F= -v key="$key" '$1==key {sub(/^[^=]*=/, ""); print}' "$manifest"
+}
+
+verify_firmware_descriptor() {
+  local input="$1" bundle manifest signature artifact artifact_path expected_sha actual_sha
+  local format oem model device region bootloader key verified=0 count
+  [ -n "$input" ] || die "Uso: verify-firmware <diretório-do-bundle | firmware.manifest>"
+  if [ -d "$input" ]; then
+    bundle="$(readlink -f "$input")"
+    manifest="$bundle/firmware.manifest"
+  elif [ -f "$input" ] && [ "$(basename "$input")" = firmware.manifest ]; then
+    manifest="$(readlink -f "$input")"
+    bundle="$(dirname "$manifest")"
+  else
+    die "Descritor não encontrado: informe um diretório com firmware.manifest."
+  fi
+  signature="$manifest.sig"
+  [ -f "$manifest" ] || die "Manifesto ausente: $manifest"
+  [ -f "$signature" ] || die "Assinatura destacada ausente: $signature"
+
+  # Formato deliberadamente pequeno: um campo por linha, ASCII seguro, sem
+  # source/eval e sem chaves duplicadas ou desconhecidas.
+  if grep -Ev '^(format|oem|model|device|region|bootloader|artifact|sha256)=[-A-Za-z0-9._+* ]+$' "$manifest" | grep -q .; then
+    die "Manifesto contém campo ou caractere não permitido."
+  fi
+  for key in format oem model device region bootloader artifact sha256; do
+    count="$(awk -F= -v key="$key" '$1==key {n++} END{print n+0}' "$manifest")"
+    [ "$count" -le 1 ] || die "Campo duplicado no manifesto: $key"
+  done
+
+  format="$(firmware_manifest_get "$manifest" format)"
+  oem="$(firmware_manifest_get "$manifest" oem)"
+  model="$(firmware_manifest_get "$manifest" model)"
+  device="$(firmware_manifest_get "$manifest" device)"
+  region="$(firmware_manifest_get "$manifest" region)"
+  bootloader="$(firmware_manifest_get "$manifest" bootloader)"
+  artifact="$(firmware_manifest_get "$manifest" artifact)"
+  expected_sha="$(firmware_manifest_get "$manifest" sha256)"
+  [ "$format" = "android-dex-firmware-v1" ] || die "Formato de manifesto incompatível: '${format:-vazio}'"
+  [ -n "$oem" ] && [ -n "$artifact" ] && [ -n "$expected_sha" ] || die "Manifesto incompleto (oem/artifact/sha256 são obrigatórios)."
+  [ -n "$model" ] || [ -n "$device" ] || die "Manifesto precisa vincular model ou device."
+  [[ "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]] || die "SHA-256 inválido no manifesto."
+  case "$artifact" in */*|..|.|'') die "artifact precisa ser um nome de arquivo local, sem diretórios.";; esac
+  artifact_path="$bundle/$artifact"
+  [ -f "$artifact_path" ] || die "Artefato declarado não existe: $artifact_path"
+
+  require_tool openssl "Instale openssl para verificar a assinatura do descritor." || return 1
+  require_tool sha256sum "Instale coreutils para verificar a integridade do artefato." || return 1
+  [ -d "$TRUSTED_KEYS_DIR" ] || die "Nenhuma chave confiável configurada em $TRUSTED_KEYS_DIR"
+  for key in "$TRUSTED_KEYS_DIR"/*.pem; do
+    [ -f "$key" ] || continue
+    if openssl dgst -sha256 -verify "$key" -signature "$signature" "$manifest" >/dev/null 2>&1; then
+      verified=1
+      log_ok "Assinatura do manifesto válida com: $(basename "$key")"
+      break
+    fi
+  done
+  [ "$verified" = 1 ] || die "Assinatura do manifesto não corresponde a nenhuma chave confiável."
+
+  actual_sha="$(sha256sum "$artifact_path" | awk '{print $1}')"
+  [ "${actual_sha,,}" = "${expected_sha,,}" ] || die "SHA-256 do artefato diverge do manifesto."
+  log_ok "Integridade do artefato confirmada: $artifact"
+
+  [ "$FP_TRANSPORT" != none ] || die "Conecte o aparelho para vincular o descritor à identidade detectada."
+  [ "$FP_OEM" = "$oem" ] || die "OEM do manifesto ('$oem') diverge do aparelho ('$FP_OEM')."
+  if [ -n "$model" ] && [ "$model" != "*" ]; then
+    [ "$FP_MODEL" = "$model" ] || die "Modelo do manifesto ('$model') diverge do aparelho ('${FP_MODEL:-?}')."
+  fi
+  if [ -n "$device" ] && [ "$device" != "*" ]; then
+    [ "$FP_DEVICE" = "$device" ] || die "Device/codename do manifesto ('$device') diverge do aparelho ('${FP_DEVICE:-?}')."
+  fi
+  log_ok "Compatibilidade básica confirmada: OEM=$oem model=${model:-*} device=${device:-*}."
+  [ -n "$region" ] && log_info "Região declarada: $region (validação automática ainda indisponível)."
+  [ -n "$bootloader" ] && log_info "Bootloader mínimo declarado: $bootloader (anti-rollback ainda não validado)."
+  printf '%s\n' "$artifact_path"
+}
+
+verify_descriptor_if_present() {
+  local input="$1"
+  if [ -d "$input" ] && [ -f "$input/firmware.manifest" ]; then
+    verify_firmware_descriptor "$input" >/dev/null
+  else
+    log_warn "Bundle sem firmware.manifest assinado: somente orientação; nunca será elegível a --commit."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -53,7 +146,7 @@ fp_transport() {
   if have fastboot && fastboot devices 2>/dev/null | grep -q .; then
     echo fastboot; return 0
   fi
-  if have adb && adb get-state >/dev/null 2>&1; then
+  if have adb && adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{found=1} END{exit found?0:1}'; then
     echo adb; return 0
   fi
   # Modo download Samsung: aparece via lsusb (04e8:685d costuma ser download)
@@ -63,16 +156,40 @@ fp_transport() {
   echo none
 }
 
+fp_select_serial() {
+  local transport="$1" requested="${FLASH_DEVICE_SERIAL:-}" item selected="" count=0
+  case "$transport" in
+    adb)
+      while IFS= read -r item; do
+        [ -n "$item" ] || continue
+        if [ -n "$requested" ]; then [ "$item" = "$requested" ] && { selected="$item"; count=1; break; }; else selected="$item"; count=$((count + 1)); fi
+      done < <(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1}')
+      ;;
+    fastboot)
+      while IFS= read -r item; do
+        [ -n "$item" ] || continue
+        if [ -n "$requested" ]; then [ "$item" = "$requested" ] && { selected="$item"; count=1; break; }; else selected="$item"; count=$((count + 1)); fi
+      done < <(fastboot devices 2>/dev/null | awk 'NF{print $1}')
+      ;;
+  esac
+  if [ -n "$requested" ] && [ "$selected" != "$requested" ]; then
+    die "FLASH_DEVICE_SERIAL='$requested' não está online em $transport; não selecionarei outro aparelho."
+  fi
+  [ "$count" -gt 0 ] || die "Nenhum aparelho online em $transport."
+  [ "$count" -eq 1 ] || die "Há $count aparelhos em $transport. Defina FLASH_DEVICE_SERIAL para evitar operar no dispositivo errado."
+  printf '%s\n' "$selected"
+}
+
 # getprop resiliente (só faz sentido no transporte adb)
 fp_getprop() {
   local key="$1"
-  adb shell getprop "$key" 2>/dev/null | tr -d '\r'
+  adb -s "$FP_ADB_SERIAL" shell getprop "$key" 2>/dev/null | tr -d '\r'
 }
 
 # getvar do fastboot (a saída vai p/ stderr no fastboot)
 fp_getvar() {
   local key="$1"
-  fastboot getvar "$key" 2>&1 | awk -F': ' -v k="$key" '$1==k{print $2; exit}' | tr -d '\r'
+  fastboot -s "$FP_FASTBOOT_SERIAL" getvar "$key" 2>&1 | awk -F': ' -v k="$key" '$1==k{print $2; exit}' | tr -d '\r'
 }
 
 # Fingerprint amplo, tolerante ao transporte disponível.
@@ -85,6 +202,8 @@ fp_collect() {
 
   case "$FP_TRANSPORT" in
     adb)
+      FP_ADB_SERIAL="$(fp_select_serial adb)" || die "Não foi possível selecionar um único aparelho ADB."
+      ANDROID_SERIAL="$FP_ADB_SERIAL"; export ANDROID_SERIAL
       FP_MANUFACTURER="$(fp_getprop ro.product.manufacturer)"
       FP_BRAND="$(fp_getprop ro.product.brand)"
       FP_MODEL="$(fp_getprop ro.product.model)"
@@ -99,6 +218,8 @@ fp_collect() {
       FP_OEM_UNLOCK_ALLOWED="$(fp_getprop sys.oem_unlock_allowed)"
       ;;
     fastboot)
+      FP_FASTBOOT_SERIAL="$(fp_select_serial fastboot)" || die "Não foi possível selecionar um único aparelho fastboot."
+      ANDROID_SERIAL="$FP_FASTBOOT_SERIAL"; export ANDROID_SERIAL
       FP_MANUFACTURER="$(fp_getvar product)"
       FP_MODEL="$(fp_getvar product)"
       FP_DEVICE="$(fp_getvar product)"
@@ -126,7 +247,7 @@ fp_normalize_oem() {
     *xiaomi*|*redmi*|*poco*|*hyperos*) echo xiaomi ;;
     *motorola*|*moto*|*lenovo*)       echo motorola ;;
     *oneplus*|*oppo*|*realme*)        echo oneplus ;;
-    *sony*|*sonyericsson*)            echo oneplus ;;   # fluxo fastboot próximo
+    *sony*)                            echo oneplus ;;   # fluxo fastboot próximo
     *) echo generic ;;
   esac
 }
@@ -136,7 +257,7 @@ fp_normalize_oem() {
 # ---------------------------------------------------------------------------
 fp_battery_level() {
   case "$(fp_transport)" in
-    adb) adb shell dumpsys battery 2>/dev/null | awk -F': ' '/ level:/{print $2; exit}' | tr -d '\r ' ;;
+    adb) adb -s "${FP_ADB_SERIAL:-$(fp_select_serial adb)}" shell dumpsys battery 2>/dev/null | awk -F': ' '/ level:/{print $2; exit}' | tr -d '\r ' ;;
     *)   echo "" ;;  # fastboot não expõe de forma padrão
   esac
 }

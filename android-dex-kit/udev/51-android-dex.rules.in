@@ -1,0 +1,42 @@
+# Android-DEX Kit — interfaces ADB, fastboot e Samsung Download/Odin
+# Lista de VIDs conferida com o projeto android-udev-rules:
+# https://github.com/M0Rf30/android-udev-rules
+
+ACTION!="add", ACTION!="bind", GOTO="android_dex_rules_end"
+SUBSYSTEM!="usb", GOTO="android_dex_rules_end"
+
+# ADB e fastboot usam subclasses oficiais da interface vendor-specific.
+ENV{ID_USB_INTERFACES}=="*:ff4201:*", GOTO="android_dex_rules_match"
+ENV{ID_USB_INTERFACES}=="*:ff4203:*", GOTO="android_dex_rules_match"
+
+# Alguns bootloaders não publicam ID_USB_INTERFACES. Restrinja o fallback a
+# devices vendor-specific e VIDs Android conhecidos (não ao VID inteiro).
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="0502", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="0b05", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="0bb4", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="0fce", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="1004", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="12d1", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="17ef", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="18d1", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="1949", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="19d2", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="22b8", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2717", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2a70", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2ae5", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2d95", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2e04", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2e17", GOTO="android_dex_rules_match"
+ATTR{bDeviceClass}=="ff", ATTR{idVendor}=="2f17", GOTO="android_dex_rules_match"
+
+# Samsung Download/Odin usa produtos próprios e não necessariamente ff/42/xx.
+ATTR{idVendor}=="04e8", ATTR{idProduct}=="685d", GOTO="android_dex_rules_match"
+ATTR{idVendor}=="04e8", ATTR{idProduct}=="6860", GOTO="android_dex_rules_match"
+
+GOTO="android_dex_rules_end"
+
+LABEL="android_dex_rules_match"
+MODE="0660", GROUP="@GROUP@", TAG+="uaccess"
+
+LABEL="android_dex_rules_end"

@@ -100,10 +100,9 @@ TXT
   [ -f "$patched" ] || die "PATCHED_IMG não existe: $patched"
   guard_verify_sha256 "$patched" "${PATCHED_SHA256:-}"
   sm_require || return 1
-  log_step "Gravando AP corrigido (Magisk) via heimdall"
-  # Partição típica de boot no protocolo Odin: BOOT (varia por modelo).
-  run_or_echo heimdall flash --BOOT "$patched" --no-reboot
-  log_ok "Gravado. Reinicie manualmente segurando Vol-Baixo+Power e entre logo no Magisk (evita restaurar o boot no 1º boot)."
+  log_step "AP corrigido validado para o roteiro guiado"
+  log_warn "A partição de boot varia por modelo; a gravação automática por Heimdall está desativada sem PIT/descritor validado."
+  log_info "Use a ferramenta oficial Samsung/Odin e o procedimento específico do modelo para concluir."
 }
 
 driver_flash_firmware() {
@@ -119,20 +118,14 @@ driver_flash_firmware() {
 TXT
   [ -n "$ap" ] || die "Informe ao menos AP=/caminho/AP_*.tar.md5 (e de preferência BL/CP/CSC)."
   guard_verify_model "$EXPECT_MODEL"
-  log_step "Gravando firmware oficial via heimdall (modo Download)"
-  # Heimdall grava por partição; para .tar oficiais o caminho robusto é
-  # extrair e mapear cada imagem. Aqui delegamos ao modo interativo do heimdall
-  # via flash com os arquivos que o usuário mapear em EXTRA_HEIMDALL.
-  if [ -n "${EXTRA_HEIMDALL:-}" ]; then
-    # shellcheck disable=SC2086
-    run_or_echo heimdall flash $EXTRA_HEIMDALL
-  else
-    log_warn "Gravação de .tar.md5 completos exige mapear partições. Extraia os .img e informe via:"
-    log_warn '  EXTRA_HEIMDALL="--BOOT boot.img --SYSTEM system.img ..." android-dex-flash flash-firmware --commit'
-    die "Sem mapeamento de partições (EXTRA_HEIMDALL). Abortando por segurança."
-  fi
+  log_step "Firmware Samsung identificado para o roteiro guiado"
+  log_warn "A gravação automática por Heimdall está desativada: nomes e layouts de partição variam por modelo/PIT."
+  log_info "Valide modelo, CSC, revisão de bootloader e hashes; conclua com a ferramenta oficial Samsung/Odin."
 }
 
 driver_restore_boot() {
   die "Restauração Samsung: regrave o AP OFICIAL do seu firmware via 'flash-firmware' (heimdall)."
 }
+
+# Unlock é físico/manual; root, firmware e restore exigem descritores por modelo.
+driver_commit_supported() { return 1; }

@@ -13,11 +13,13 @@ em qualquer versão.
 ## O que "robusto e resiliente" significa aqui
 
 O núcleo é um **supervisor** (`android-dex`) que não apenas lança o scrcpy, mas
-cuida da sessão de ponta a ponta: descobre o aparelho (USB primeiro, depois o IP
-Wi-Fi salvo), aplica os ajustes de modo desktop, sobe a sessão e, se a conexão
+cuida da sessão de ponta a ponta: seleciona um único aparelho (e bloqueia quando
+há ambiguidade), fixa sua identidade pela sessão, aplica os ajustes de modo
+desktop, sobe a sessão e, se a conexão
 cair, reconecta sozinho com *backoff* exponencial e *jitter*. Se o transporte
-Wi-Fi morrer, ele derruba e refaz o `adb connect`. O encerramento é limpo (mata o
-scrcpy, reverte ajustes opcionalmente) via `trap`. Além disso, um serviço
+Wi-Fi morrer, ele derruba e refaz o `adb connect`. Um lock impede supervisores
+duplicados, e `--stop` encerra o supervisor validado junto com o scrcpy. O
+encerramento é limpo (e reverte ajustes opcionalmente) via `trap`. Além disso, um serviço
 **systemd de usuário** cobre a falha do processo inteiro (ex.: `adb` morto),
 reiniciando o supervisor. Tudo é logado em `~/.local/state/android-dex/`.
 
@@ -85,7 +87,7 @@ Tudo mora em `~/.config/android-dex/config.env` (criado a partir do
 
 | Variável | Padrão | Função |
 | --- | --- | --- |
-| `MODE` | `dex` | `dex` (display virtual) ou `mirror` (espelha a tela real) |
+| `MODE` | `auto` | detecta conservadoramente; também aceita `dex` ou `mirror` |
 | `CONNECTION` | `auto` | `auto`, `usb` ou `wifi` |
 | `DEVICE_IP` | vazio | IP:porta do aparelho (preenchido pelo `-connect`) |
 | `DEVICE_SERIAL` | vazio | fixa um serial quando há vários aparelhos |
@@ -99,18 +101,23 @@ Tudo mora em `~/.config/android-dex/config.env` (criado a partir do
 | `START_APP` | vazio | abre um app/launcher no display virtual vazio |
 | `RECONNECT` | `1` | supervisor reconecta em quedas |
 | `BACKOFF_CAP` | `30` | teto do atraso entre tentativas (s) |
+| `HEALTHY_SESSION_SECONDS` | `15` | estabilidade mínima antes de zerar o backoff |
+| `AUTO_DEX_MIN_SDK` | `35` | SDK mínimo para tentar DeX automaticamente |
 | `EXTRA_ARGS` | vazio | argumentos crus repassados ao scrcpy |
 
 ## Compatibilidade do modo DeX
 
-O modo desktop depende do aparelho ter o *Desktop Mode* do Android. A melhor
-experiência hoje é em **Samsung One UI 8 / Android 15+**, onde o DeX aparece
-sozinho no display virtual. Em muitos aparelhos não-Samsung o display abre vazio —
-nesse caso defina `START_APP` para um launcher (por exemplo `org.fossify.home`,
-open-source) ou para o app que você quer usar, e experimente
-`VD_SYSTEM_DECORATIONS="0"` se a interface vier quebrada. Pixels tendem a exigir
-uma tela física para ativar o recurso. Em qualquer aparelho, `MODE="mirror"`
-sempre funciona.
+O padrão `MODE="auto"` lê fabricante, SDK e capacidades de display secundário.
+Quando a capacidade não é confirmada, usa `mirror`; se um display virtual cair
+rapidamente, tenta `mirror` uma vez. Perfis instalados para Samsung, Google,
+Xiaomi, Motorola e OnePlus/OPPO/Realme ajustam freeform, decorações e escolhem um
+launcher somente quando o pacote realmente existe. As escolhas explícitas do
+usuário continuam tendo prioridade. Use `--dex` para forçar um teste ou
+`--mirror` para máxima compatibilidade.
+
+O instalador também inclui regras udev para interfaces ADB/fastboot, VIDs
+Android conhecidos e Samsung Download/Odin; regras existentes da distro
+continuam coexistindo.
 
 ## Serviço systemd (opcional)
 

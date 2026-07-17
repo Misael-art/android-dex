@@ -19,53 +19,52 @@ Legenda de status: `TODO` · `WIP` (em progresso) · `DONE` · `BLOCKED`.
 > Correções e recursos que aumentam robustez, resiliência e **compatibilidade
 > entre marcas** sem sair do escopo "sem root".
 
-### A1. Regra udev confiável por *vendor ID* — `TODO` · impacto: ALTO
+### A1. Regra udev confiável por *vendor ID* — `WIP` · impacto: ALTO
 **Problema.** `install.sh:139` casa `ATTR{bDeviceClass}=="ff"` no nível do
 *device*. Muitos aparelhos (Samsung, Xiaomi, etc.) expõem `bDeviceClass=0x00` no
 device e a interface ADB (`ff/42/01`) só como *interface*, ou aparecem como
 composto MTP+ADB — nesses casos a regra não pega e o USB volta a exigir root.
 Hoje o kit depende, na prática, do pacote `android-sdk-platform-tools-common`
 existir na distro.
-**Solução.** Embarcar uma lista de `idVendor` por fabricante (padrão do
-`android-udev` do Debian / repositório M0Rf30), gerando
-`/etc/udev/rules.d/51-android-dex.rules` com uma linha por VID conhecido +
-`TAG+="uaccess"`. Manter a regra genérica atual como *fallback* adicional.
+**Implementado.** Template próprio casa interfaces ADB/fastboot `ff/42/01` e
+`ff/42/03`, usa fallback restrito a classe vendor-specific + VIDs conhecidos e
+cobre Samsung Download/Odin. A renderização valida o nome do grupo. Falta a
+matriz de hardware real.
 **Aceite.** `adb devices` autoriza sem root em Samsung, Xiaomi, Motorola, Pixel
 e OnePlus após relogin; `udevadm test` mostra `uaccess` aplicado ao nó do device.
 
-### A2. Corrigir o *fallback* do `--stop` — `TODO` · impacto: MÉDIO
-**Problema.** `android-dex:259` faz `pkill -f 'scrcpy .*android-dex'`, mas a
-linha de comando do scrcpy contém `--window-title "Android DEX"` (espaço e
-maiúsculas), não `android-dex`. O caminho por PID-file funciona; o *fallback*
-nunca casa — bug silencioso.
-**Solução.** Casar pelo título real (`--window-title "$WINDOW_TITLE"`) ou marcar
-os processos com um argumento-âncora estável (ex.: variável de ambiente
-`ADX_SESSION=1` no `scrcpy`), e casar por ela. Testar com PID-file ausente.
-**Aceite.** Matar o PID-file na mão e rodar `--stop` ainda encerra a sessão.
+### A2. Corrigir o ciclo de vida do `--stop` — `DONE` · impacto: MÉDIO
+**Implementado.** Um lock atômico registra PID, tempo de início e token do
+supervisor. `--stop` valida a identidade, encerra o supervisor (que encerra seu
+scrcpy) e para a unidade systemd quando ativa. O `pkill -f` amplo foi removido.
+**Aceite.** Teste com mocks confirma que o supervisor termina e não relança o
+scrcpy; uma segunda instância é recusada.
 
-### A3. Perfis por dispositivo (`profiles/`) — `TODO` · impacto: ALTO
+### A3. Perfis por dispositivo (`profiles/`) — `WIP` · impacto: ALTO
 **Problema.** Ajustes de compatibilidade (`START_APP`, `VD_SYSTEM_DECORATIONS`,
 DPI/resolução) hoje são descobertos por tentativa e erro por marca.
-**Solução.** Diretório `profiles/` com presets casados por
+**Implementado.** Diretório `profiles/` com presets casados por
 `ro.product.manufacturer` / `ro.product.model` (lidos via `adb shell getprop`),
-aplicados automaticamente antes de montar os argumentos do scrcpy. Usuário pode
-sobrescrever no `config.env`.
+aplicados antes dos argumentos do scrcpy; launchers só são usados se instalados
+e o config explícito prevalece. Faltam perfis finos por modelo.
 **Aceite.** Em um não-Samsung, `android-dex` sobe já com launcher e decorações
 corretas sem edição manual de config.
 
-### A4. Detecção automática de capacidade (dex vs mirror) — `TODO` · impacto: ALTO
+### A4. Detecção automática de capacidade (dex vs mirror) — `WIP` · impacto: ALTO
 **Problema.** O kit tenta `dex` e o usuário vê tela preta quando o aparelho não
 tem Desktop Mode utilizável.
-**Solução.** Antes de escolher o modo: checar versão do Android, presença de
-`enable_freeform_support`, e se o display virtual sobe com launcher. Se não,
-cair para `mirror` com mensagem clara explicando o porquê.
+**Implementado.** `MODE=auto` checa scrcpy, SDK, display secundário, ajustes
+freeform e perfil OEM; dúvida resulta em mirror. Falha rápida do display virtual
+aciona uma tentativa única em mirror. Falta validar a heurística em hardware.
 **Aceite.** Aparelho sem Desktop Mode nunca mostra tela preta; loga o motivo do
 downgrade para mirror.
 
-### A5. Seletor de múltiplos aparelhos (`--list`) — `TODO` · impacto: MÉDIO
+### A5. Seletor de múltiplos aparelhos (`--list`) — `WIP` · impacto: MÉDIO
 **Problema.** `resolve_device` pega "o primeiro" USB/TCP; com dois aparelhos sem
 `DEVICE_SERIAL` o comportamento é imprevisível.
-**Solução.** `android-dex --list` lista `adb devices -l` numerado com
+**Implementado agora.** O runtime recusa seleção ambígua, respeita
+`DEVICE_SERIAL` estritamente e fixa o serial após a primeira sessão. Falta a UX:
+`android-dex --list` deve listar `adb devices -l` numerado com
 modelo/serial; seleção interativa quando há mais de um e nenhum `DEVICE_SERIAL`.
 **Aceite.** Com dois aparelhos plugados, o usuário escolhe qual usar.
 
@@ -93,10 +92,14 @@ sem registro.
 `ADX_DEBUG=1`, preservando o comportamento não-fatal.
 **Aceite.** Com `ADX_DEBUG=1`, falhas de comandos "silenciosos" aparecem no log.
 
-### A9. Suíte de smoke tests — `TODO` · impacto: MÉDIO
+### A9. Suíte de smoke tests — `DONE` · impacto: MÉDIO
 **Solução.** `tests/` com `shellcheck` em todos os scripts + testes de
 `version_ge`, `adx_backoff`, parsing de `adb devices` (com fixtures), e um
 `--dry-run` que imprime os argumentos do scrcpy sem executar.
+**Implementado agora.** `tests/run.sh` cobre bundles, descritor assinado,
+identidade ADB/fastboot, udev, perfis/modo automático, lock/stop e backoff usando
+ADB/fastboot/scrcpy simulados. `make test`, `make lint` e GitHub Actions fecham
+o ciclo sem aparelho físico.
 **Aceite.** `make test` roda em CI sem aparelho físico.
 
 ### A10. Paridade Windows (PowerShell) — `TODO` · impacto: BAIXO

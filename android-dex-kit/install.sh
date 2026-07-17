@@ -17,7 +17,7 @@
 #   ./install.sh --uninstall     # atalho p/ uninstall.sh
 set -uo pipefail
 
-SRC_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+SRC_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 . "$SRC_DIR/lib/common.sh"
 
 NO_DEPS=0
@@ -103,8 +103,8 @@ install_deps() {
     log_warn "scrcpy $ver é antigo para o modo DeX (precisa >= $MIN_SCRCPY)."
     if have snap; then
       log_info "Tentando versão recente via snap..."
-      $SUDO snap install scrcpy 2>/dev/null && log_ok "scrcpy via snap instalado." \
-        || log_warn "snap falhou. O modo 'mirror' funciona; para DeX, atualize o scrcpy."
+      if $SUDO snap install scrcpy 2>/dev/null; then log_ok "scrcpy via snap instalado."
+      else log_warn "snap falhou. O modo 'mirror' funciona; para DeX, atualize o scrcpy."; fi
     else
       log_warn "Sem snap. O modo 'mirror' funciona normalmente; para DeX, compile/baixe scrcpy >= $MIN_SCRCPY."
     fi
@@ -117,6 +117,14 @@ install_deps() {
 # ---------------------------------------------------------------------------
 # 2. Acesso USB (udev + grupo) — sem root em runtime
 # ---------------------------------------------------------------------------
+render_udev_rules() {
+  local group="$1" output="$2"
+  local template="$SRC_DIR/udev/51-android-dex.rules.in"
+  [ -f "$template" ] || { log_error "Template udev ausente: $template"; return 1; }
+  case "$group" in *[!A-Za-z0-9_-]*|'') log_error "Grupo udev inválido: '$group'"; return 1;; esac
+  sed "s/@GROUP@/$group/g" "$template" > "$output"
+}
+
 setup_udev() {
   log_step "Configurando acesso USB (udev)"
   if [ "$(id -u)" -ne 0 ] && ! have sudo; then
@@ -125,28 +133,24 @@ setup_udev() {
   fi
   need_root_cmd || return
 
-  # Se o pacote android-sdk-platform-tools-common existir (Debian/Ubuntu), ele já
-  # traz regras. Ainda assim, garantimos uma regra genérica ampla p/ o grupo.
+  # Se a distro já trouxer regras Android, elas coexistem. A regra do kit cobre
+  # interfaces ADB/fastboot e VIDs de bootloader que costumam escapar da regra
+  # genérica de classe no nível do device.
   local rules="/etc/udev/rules.d/51-android-dex.rules"
   local group="plugdev"
   getent group plugdev >/dev/null 2>&1 || group="adbusers"
   getent group "$group" >/dev/null 2>&1 || $SUDO groupadd "$group" 2>/dev/null || true
 
   local tmp; tmp="$(mktemp)"
-  cat > "$tmp" <<EOF
-# Android-DEX Kit — acesso a dispositivos Android para ADB
-# Regra ampla: qualquer dispositivo USB com interface ADB
-SUBSYSTEM=="usb", ATTR{bDeviceClass}=="ff", MODE="0660", GROUP="$group", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{adb_user}=="yes", MODE="0660", GROUP="$group", TAG+="uaccess"
-EOF
+  render_udev_rules "$group" "$tmp" || { rm -f "$tmp"; return 1; }
   $SUDO install -m 0644 "$tmp" "$rules" && log_ok "Regra udev instalada: $rules"
   rm -f "$tmp"
 
   # adiciona o usuário ao grupo
   if ! id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$group"; then
-    $SUDO usermod -aG "$group" "$USER" 2>/dev/null \
-      && log_ok "Usuário '$USER' adicionado ao grupo '$group' (reloga p/ efetivar)." \
-      || log_warn "Não consegui adicionar ao grupo '$group'."
+    if $SUDO usermod -aG "$group" "$USER" 2>/dev/null; then
+      log_ok "Usuário '$USER' adicionado ao grupo '$group' (reloga p/ efetivar)."
+    else log_warn "Não consegui adicionar ao grupo '$group'."; fi
   fi
 
   $SUDO udevadm control --reload-rules 2>/dev/null || true
@@ -161,15 +165,17 @@ install_files() {
 
   local bindir="$HOME/.local/bin"
   local libdir="$ADX_DATA_DIR/lib"
+  local profilesdir="$ADX_DATA_DIR/profiles"
   local appsdir="$XDG_DATA_HOME/applications"
   local icondir="$XDG_DATA_HOME/icons/hicolor/scalable/apps"
   local unitdir="$XDG_CONFIG_HOME/systemd/user"
 
-  mkdir -p "$bindir" "$libdir" "$appsdir" "$icondir" "$unitdir" "$ADX_CONFIG_DIR"
+  mkdir -p "$bindir" "$libdir" "$profilesdir" "$appsdir" "$icondir" "$unitdir" "$ADX_CONFIG_DIR"
 
   install -m 0755 "$SRC_DIR/bin/android-dex"         "$bindir/android-dex"
   install -m 0755 "$SRC_DIR/bin/android-dex-connect" "$bindir/android-dex-connect"
   install -m 0644 "$SRC_DIR/lib/common.sh"           "$libdir/common.sh"
+  install -m 0644 "$SRC_DIR"/profiles/*.env          "$profilesdir/"
   log_ok "Binários em $bindir (android-dex, android-dex-connect)"
 
   if [ -f "$ADX_CONFIG_FILE" ]; then
@@ -191,9 +197,9 @@ install_files() {
   if have systemctl; then
     systemctl --user daemon-reload 2>/dev/null || true
     if [ "$ENABLE_SERVICE" = "1" ]; then
-      systemctl --user enable --now android-dex.service 2>/dev/null \
-        && log_ok "Serviço systemd de usuário habilitado (auto-start na sessão gráfica)." \
-        || log_warn "Não consegui habilitar o serviço agora (talvez fora de sessão gráfica)."
+      if systemctl --user enable --now android-dex.service 2>/dev/null; then
+        log_ok "Serviço systemd de usuário habilitado (auto-start na sessão gráfica)."
+      else log_warn "Não consegui habilitar o serviço agora (talvez fora de sessão gráfica)."; fi
     else
       log_info "Serviço systemd instalado (desabilitado). Habilite com:"
       log_info "  systemctl --user enable --now android-dex.service"
@@ -203,7 +209,7 @@ install_files() {
   # PATH check
   case ":$PATH:" in
     *":$bindir:"*) : ;;
-    *) log_warn "~/.local/bin não está no PATH. Adicione ao seu shell rc:"
+    *) log_warn "$HOME/.local/bin não está no PATH. Adicione ao seu shell rc:"
        log_warn "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
   esac
 }
@@ -232,4 +238,4 @@ main() {
   install_files
   final_hint
 }
-main
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main; fi

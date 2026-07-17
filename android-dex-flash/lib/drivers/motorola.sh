@@ -40,7 +40,7 @@ driver_warnings() {
 driver_unlock() {
   fb_require || return 1
   log_step "Obtendo dados de desbloqueio da Motorola"
-  run_or_echo fastboot oem get_unlock_data
+  fb_run oem get_unlock_data
   cat >&2 <<'TXT'
 
   Próximos passos (oficiais):
@@ -51,8 +51,8 @@ driver_unlock() {
 TXT
   if [ -n "${UNLOCK_CODE:-}" ]; then
     warn_irreversible "'fastboot oem unlock' APAGA o aparelho."
-    run_or_echo fastboot oem unlock "$UNLOCK_CODE"
-    run_or_echo fastboot reboot
+    fb_run oem unlock "$UNLOCK_CODE"
+    fb_run reboot
     log_ok "Comando de unlock enviado."
   else
     log_warn "Sem UNLOCK_CODE ainda — pare aqui, obtenha o código no site oficial e volte."
@@ -60,3 +60,6 @@ TXT
 }
 
 # root / flash-firmware / restore-boot herdados do generic.sh (fastboot).
+driver_commit_supported() {
+  [ "$1" = "unlock" ]
+}

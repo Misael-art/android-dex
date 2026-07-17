@@ -69,9 +69,13 @@ driver_flash_firmware() {
   if [ -d "$path" ] && [ -f "$path/flash_all.sh" ]; then
     fb_require || return 1
     warn_irreversible "flash_all.sh do fastboot ROM apaga e regrava tudo. Confira o modelo."
-    ( cd "$path" && run_or_echo bash ./flash_all.sh )
+    log_warn "O android-dex-flash não executa scripts contidos no fastboot ROM."
+    log_info "Confira codename, região, variante, anti-rollback e hashes; conclua com a ferramenta oficial Xiaomi."
   else
     # cai para o fluxo genérico (flash-all.sh / zip)
     fb_flash_factory "$path"
   fi
 }
+
+# Unlock é um guia manual; gravações automáticas permanecem bloqueadas.
+driver_commit_supported() { return 1; }

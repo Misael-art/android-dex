@@ -60,3 +60,9 @@ driver_warnings() {
 
 # Herdadas do generic.sh (fastboot puro é o caminho certo p/ Pixel):
 #   driver_unlock / driver_root / driver_flash_firmware / driver_restore_boot
+
+# Neste estágio, somente o unlock canônico do Pixel pode executar no host.
+# Root/firmware/restore permanecem guiados até validação forte do artefato.
+driver_commit_supported() {
+  [ "$1" = "unlock" ]
+}

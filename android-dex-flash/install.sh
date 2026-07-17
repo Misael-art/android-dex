@@ -33,7 +33,8 @@ done
 SUDO=""
 need_root_cmd() {
   if [ "$(id -u)" -ne 0 ]; then
-    have sudo && SUDO="sudo" || { log_warn "sudo ausente; passos de root serão pulados."; return 1; }
+    if have sudo; then SUDO="sudo"
+    else log_warn "sudo ausente; passos de root serão pulados."; return 1; fi
   fi
   return 0
 }
@@ -60,12 +61,12 @@ install_deps() {
   log_info "Gerenciador: $pm"
   need_root_cmd || true
 
-  local pkg_tools
+  local -a pkg_tools
   case "$pm" in
-    apt-get) pkg_tools="android-tools-adb android-tools-fastboot" ;;
-    *)       pkg_tools="android-tools" ;;
+    apt-get) pkg_tools=(android-tools-adb android-tools-fastboot) ;;
+    *)       pkg_tools=(android-tools) ;;
   esac
-  have fastboot || install_pkgs "$pm" $pkg_tools || log_warn "Falha ao instalar android-tools via $pm."
+  have fastboot || install_pkgs "$pm" "${pkg_tools[@]}" || log_warn "Falha ao instalar android-tools via $pm."
   have adb && log_ok "adb: $(adb version 2>/dev/null | head -n1)"
   have fastboot && log_ok "fastboot: $(fastboot --version 2>/dev/null | head -n1)"
 
@@ -89,20 +90,21 @@ check_udev() {
     log_warn "Instale o android-dex-kit (./install.sh dele configura udev) ou adicione uma regra"
     log_warn "por vendor-id. Sem isso, adb/fastboot podem exigir sudo."
   fi
-  # Fastboot precisa de acesso ao dispositivo em modo bootloader (VID muda!).
-  log_info "Obs.: em modo fastboot o VID/PID do aparelho muda; a regra por-VID cobre isso (roadmap A1)."
+  log_info "A regra do kit cobre interfaces ADB/fastboot, VIDs conhecidos e Samsung Download/Odin."
 }
 
 install_files() {
   log_step "Instalando binário, libs e config"
   local bindir="$HOME/.local/bin"
   local libdir="$XDG_DATA_HOME/android-dex-flash/lib"
-  mkdir -p "$bindir" "$libdir/drivers" "$ADXF_CONFIG_DIR"
+  local firmwaredir="$XDG_DATA_HOME/android-dex-flash/firmware"
+  mkdir -p "$bindir" "$libdir/drivers" "$firmwaredir" "$ADXF_CONFIG_DIR/trusted-keys"
 
   install -m 0755 "$SRC_DIR/bin/android-dex-flash" "$bindir/android-dex-flash"
   install -m 0644 "$SRC_DIR/lib/common.sh"         "$libdir/common.sh"
   install -m 0644 "$SRC_DIR/lib/flash-common.sh"   "$libdir/flash-common.sh"
   install -m 0644 "$SRC_DIR"/lib/drivers/*.sh      "$libdir/drivers/"
+  install -m 0644 "$SRC_DIR"/firmware/*            "$firmwaredir/"
   log_ok "Binário em $bindir/android-dex-flash"
   log_ok "Libs em $libdir (common.sh + flash-common.sh + drivers/)"
 
@@ -116,7 +118,7 @@ install_files() {
 
   case ":$PATH:" in
     *":$bindir:"*) : ;;
-    *) log_warn "~/.local/bin não está no PATH. Adicione: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+    *) log_warn "$HOME/.local/bin não está no PATH. Adicione: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
   esac
 }
 

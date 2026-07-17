@@ -15,20 +15,23 @@
 # ---------------------------------------------------------------------------
 fb_require() {
   require_tool fastboot "Instale o pacote 'android-tools'/'fastboot' (mesmo do adb)." || return 1
-  if ! fastboot devices 2>/dev/null | grep -q .; then
+  if ! fastboot devices 2>/dev/null | awk -v s="$FP_FASTBOOT_SERIAL" '$1==s{found=1} END{exit found?0:1}'; then
     log_warn "Nenhum aparelho em fastboot. Rode: android-dex-flash reboot-bootloader"
     return 1
   fi
   return 0
 }
 
+fb_run() { run_or_echo fastboot -s "$FP_FASTBOOT_SERIAL" "$@"; }
+
 fb_unlock() {
-  # A maioria dos AOSP/Pixel: 'flashing unlock'. Alguns antigos: 'oem unlock'.
+  # Pixel/AOSP moderno: use somente o protocolo canônico. Não tente um segundo
+  # comando de unlock automaticamente após falha/recusa do primeiro.
   fb_require || return 1
   log_step "Desbloqueando bootloader via fastboot"
   log_info "No aparelho, use Volume p/ selecionar e Power p/ confirmar o desbloqueio."
-  run_or_echo fastboot flashing unlock || run_or_echo fastboot oem unlock
-  run_or_echo fastboot reboot
+  fb_run flashing unlock
+  fb_run reboot
   log_ok "Comando de unlock enviado. O aparelho fará wipe e reiniciará."
 }
 
@@ -62,16 +65,21 @@ TXT
   # Backup do que houver antes (best-effort).
   fb_backup_boot
   log_step "Gravando boot corrigido (Magisk)"
-  run_or_echo fastboot flash boot "$patched"
-  run_or_echo fastboot reboot
+  fb_run flash boot "$patched"
+  fb_run reboot
   log_ok "Boot corrigido gravado. Abra o Magisk e confirme o estado de root."
 }
 
 # Tenta salvar o boot atual (só funciona com fastbootd + partições legíveis;
 # muitos aparelhos não permitem 'fetch'). Best-effort, nunca fatal.
 fb_backup_boot() {
-  local out="$BACKUP_DIR/boot-backup-$(date +%Y%m%d-%H%M%S).img"
-  if fastboot fetch boot "$out" >/dev/null 2>&1; then
+  local out
+  out="$BACKUP_DIR/boot-backup-$(date +%Y%m%d-%H%M%S).img"
+  if [ "${DRY_RUN:-1}" = "1" ]; then
+    log_info "[dry-run] Tentaria salvar a partição boot em: $out"
+    return 0
+  fi
+  if fastboot -s "$FP_FASTBOOT_SERIAL" fetch boot "$out" >/dev/null 2>&1; then
     log_ok "Backup do boot atual salvo: $out"
   else
     log_warn "Não consegui fazer backup do boot via fastboot (normal em muitos aparelhos). Guarde o boot.img de fábrica manualmente."
@@ -80,18 +88,21 @@ fb_backup_boot() {
 
 fb_flash_factory() {
   # Espera um diretório de imagem de fábrica com 'flash-all.sh' (padrão Pixel)
-  # OU um zip de imagens; delega ao script oficial quando presente.
+  # OU um zip de imagens. Por segurança, apenas valida e orienta: bundles de
+  # firmware são dados não confiáveis e seus scripts nunca são executados.
   local path="${1:-}"
   [ -n "$path" ] || die "Uso: flash-firmware <dir-da-imagem-de-fábrica | flash-all.sh | zip>"
   fb_require || return 1
   if [ -d "$path" ] && [ -f "$path/flash-all.sh" ]; then
-    log_step "Executando flash-all.sh oficial da imagem de fábrica"
+    log_step "Bundle de imagem de fábrica identificado"
     warn_irreversible "flash-all.sh apaga o aparelho e regrava TODAS as partições." \
                       "Firmware do modelo ERRADO = hard-brick. Confira que é do seu device."
-    ( cd "$path" && run_or_echo bash ./flash-all.sh )
+    log_warn "O android-dex-flash não executa scripts contidos em bundles de firmware."
+    log_info "Valide modelo, variante, região, anti-rollback e hashes; depois use a ferramenta oficial do fabricante."
   elif [ -f "$path" ] && case "$path" in *.zip) true;; *) false;; esac; then
-    log_step "Gravando via 'fastboot update' (zip de fábrica)"
-    run_or_echo fastboot update "$path"
+    log_step "ZIP de imagem de fábrica identificado"
+    log_warn "A gravação automática por 'fastboot update' está desativada até haver um descritor assinado de compatibilidade e partições."
+    log_info "Use a ferramenta oficial do fabricante após verificar modelo, variante, região, anti-rollback e SHA-256."
   else
     die "Caminho não reconhecido. Aponte para o diretório da imagem de fábrica (com flash-all.sh) ou um zip oficial."
   fi
@@ -103,8 +114,8 @@ fb_restore_boot() {
   [ -f "$img" ] || die "BOOT_IMG não existe: $img"
   fb_require || return 1
   log_step "Restaurando boot de estoque"
-  run_or_echo fastboot flash boot "$img"
-  run_or_echo fastboot reboot
+  fb_run flash boot "$img"
+  fb_run reboot
   log_ok "Boot de estoque restaurado."
 }
 
@@ -144,3 +155,7 @@ driver_unlock()          { fb_unlock; }
 driver_root()            { fb_root_magisk; }
 driver_flash_firmware()  { fb_flash_factory "$@"; }
 driver_restore_boot()    { fb_restore_boot; }
+
+# Fallback desconhecido é sempre deny-by-default. Drivers dedicados podem
+# liberar somente ações cujo protocolo esteja suficientemente definido.
+driver_commit_supported() { return 1; }

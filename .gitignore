@@ -14,6 +14,11 @@ backups/
 *.tar
 *.tar.md5
 
+# Chaves privadas de assinatura de firmware (chaves públicas confiadas ficam
+# na configuração local, não no repositório)
+*private*.pem
+firmware-signing*.pem
+
 # Lixo de SO/editor
 .DS_Store
 *.swp

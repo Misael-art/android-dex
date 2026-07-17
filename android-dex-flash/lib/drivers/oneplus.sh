@@ -44,9 +44,14 @@ driver_unlock() {
   fb_require || return 1
   log_info "OnePlus: 'flashing unlock' direto. OPPO/Realme: pode falhar sem a app oficial de teste."
   warn_irreversible "'fastboot flashing unlock' APAGA todos os dados."
-  run_or_echo fastboot flashing unlock || run_or_echo fastboot oem unlock
-  run_or_echo fastboot reboot
+  fb_run flashing unlock
+  fb_run reboot
   log_ok "Comando de unlock enviado. Se falhou em OPPO/Realme, use a app oficial 'In-Depth Test' e tente de novo."
 }
 
 # root / flash-firmware / restore-boot herdados do generic.sh (fastboot).
+driver_commit_supported() {
+  # Este driver agrega OEMs com protocolos incompatíveis (OnePlus, OPPO,
+  # Realme e Sony). Até separá-los e validar cada fluxo, permanece guiado.
+  return 1
+}

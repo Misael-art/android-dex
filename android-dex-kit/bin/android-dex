@@ -31,10 +31,21 @@ adx_load_config
 
 # --- estado de execução -----------------------------------------------------
 SCRCPY_PID=""
+SLEEP_PID=""
 SHOULD_RUN=1
 ONCE=0
 TARGET_SERIAL=""       # serial resolvido para a sessão atual
+PINNED_SERIAL=""       # nunca troca de aparelho durante a mesma execução
 TWEAKS_APPLIED=0
+SESSION_DURATION=0
+SCRCPY_VERSION=""
+PROFILE_KEY="generic"
+PROFILE_LOADED=0
+AUTO_MODE_SELECTED=0
+AUTO_DEX_FALLBACK_USED=0
+SESSION_TOKEN=""
+SESSION_LOCK_HELD=0
+SUPERVISOR_STATE_FILE="$ADX_STATE_DIR/supervisor.state"
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -69,11 +80,79 @@ preflight() {
   adb_ensure_server
   local ver
   ver="$(scrcpy --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
+  SCRCPY_VERSION="$ver"
   if [ -n "$ver" ] && [ "$MODE" = "dex" ] && ! version_ge "$ver" "3.0"; then
     log_warn "scrcpy $ver não suporta modo DeX (--new-display, requer >= 3.0). Caindo para espelhamento."
     MODE="mirror"
   fi
   log_info "scrcpy ${ver:-?} | modo=$MODE | conexão=$CONNECTION"
+}
+
+# ---------------------------------------------------------------------------
+# Perfil por OEM + seleção conservadora de modo
+# ---------------------------------------------------------------------------
+device_prop() { adb -s "$1" shell getprop "$2" 2>/dev/null | tr -d '\r'; }
+
+normalize_profile_key() {
+  local value; value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    *samsung*) echo samsung ;;
+    *google*|*pixel*) echo google ;;
+    *xiaomi*|*redmi*|*poco*) echo xiaomi ;;
+    *motorola*|*lenovo*) echo motorola ;;
+    *oneplus*|*oppo*|*realme*) echo oneplus ;;
+    *) echo generic ;;
+  esac
+}
+
+load_device_profile() {
+  local s="$1" identity profile="" candidate app
+  [ "$PROFILE_LOADED" = 0 ] || return 0
+  identity="$(device_prop "$s" ro.product.manufacturer) $(device_prop "$s" ro.product.brand) $(device_prop "$s" ro.product.model)"
+  PROFILE_KEY="$(normalize_profile_key "$identity")"
+  for candidate in \
+    "$(dirname "$_self")/../profiles/$PROFILE_KEY.env" \
+    "$ADX_DATA_DIR/profiles/$PROFILE_KEY.env"; do
+    [ -f "$candidate" ] && { profile="$candidate"; break; }
+  done
+  [ -n "$profile" ] || { log_warn "Perfil '$PROFILE_KEY' não encontrado; usando defaults."; PROFILE_LOADED=1; return 0; }
+
+  PROFILE_NAME=""; PROFILE_VD_SYSTEM_DECORATIONS=""; PROFILE_ENABLE_FREEFORM_TWEAKS=""; PROFILE_START_APP_CANDIDATES=""
+  # Arquivo instalado pelo próprio projeto, nunca vindo do aparelho.
+  # shellcheck disable=SC1090
+  . "$profile"
+  [ "$ADX_USER_DECORATIONS_SET" = 1 ] || [ -z "$PROFILE_VD_SYSTEM_DECORATIONS" ] || VD_SYSTEM_DECORATIONS="$PROFILE_VD_SYSTEM_DECORATIONS"
+  [ "$ADX_USER_FREEFORM_SET" = 1 ] || [ -z "$PROFILE_ENABLE_FREEFORM_TWEAKS" ] || ENABLE_FREEFORM_TWEAKS="$PROFILE_ENABLE_FREEFORM_TWEAKS"
+  if [ "$ADX_USER_START_APP_SET" != 1 ] && [ -z "$START_APP" ]; then
+    for app in $PROFILE_START_APP_CANDIDATES; do
+      if adb -s "$s" shell pm path "$app" 2>/dev/null | grep -q '^package:'; then START_APP="$app"; break; fi
+    done
+  fi
+  PROFILE_LOADED=1
+  log_info "Perfil: ${PROFILE_NAME:-$PROFILE_KEY}${START_APP:+ | launcher=$START_APP}"
+}
+
+select_runtime_mode() {
+  local s="$1" sdk secondary forced freeform
+  [ "$MODE" = "auto" ] || return 0
+  AUTO_MODE_SELECTED=1
+  if [ -n "$SCRCPY_VERSION" ] && ! version_ge "$SCRCPY_VERSION" "3.0"; then
+    MODE="mirror"
+    log_warn "Modo automático: scrcpy $SCRCPY_VERSION não suporta display virtual; usando mirror."
+    return 0
+  fi
+  sdk="$(device_prop "$s" ro.build.version.sdk)"
+  secondary="$(adb -s "$s" shell cmd package has-feature android.software.activities_on_secondary_displays 2>/dev/null | tr -d '\r')"
+  forced="$(adb -s "$s" shell settings get global force_desktop_mode_on_external_displays 2>/dev/null | tr -d '\r')"
+  freeform="$(adb -s "$s" shell settings get global enable_freeform_support 2>/dev/null | tr -d '\r')"
+  if [[ "$sdk" =~ ^[0-9]+$ ]] && [ "$sdk" -ge "$AUTO_DEX_MIN_SDK" ] && \
+     { [ "$PROFILE_KEY" = samsung ] || [ "$secondary" = true ] || [ "$forced" = 1 ] || [ "$freeform" = 1 ]; }; then
+    MODE="dex"
+    log_ok "Modo automático: desktop virtual habilitado (SDK $sdk, perfil $PROFILE_KEY)."
+  else
+    MODE="mirror"
+    log_warn "Modo automático: capacidade DeX não confirmada (SDK ${sdk:-?}, perfil $PROFILE_KEY); usando mirror. Use --dex para forçar um teste."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -96,31 +175,46 @@ wifi_try_connect() {
 resolve_device() {
   adb_ensure_server
 
+  # Depois da primeira sessão, a identidade fica presa ao mesmo serial. Se ele
+  # cair, aguardamos sua volta em vez de assumir outro aparelho conectado.
+  if [ -n "$PINNED_SERIAL" ]; then
+    adb_serial_online "$PINNED_SERIAL" && { echo "$PINNED_SERIAL"; return 0; }
+    return 1
+  fi
+
   # Serial explícito tem prioridade máxima.
   if [ -n "$DEVICE_SERIAL" ]; then
     if adb_serial_online "$DEVICE_SERIAL"; then echo "$DEVICE_SERIAL"; return 0; fi
+    log_error "DEVICE_SERIAL='$DEVICE_SERIAL' não está online; não selecionarei outro aparelho."
+    return 1
   fi
 
+  local s="" rc=0
   case "$CONNECTION" in
     usb)
-      local s; s="$(adb_first_usb_serial)"
-      [ -n "$s" ] && { echo "$s"; return 0; }
+      s="$(adb_unique_usb_serial)"; rc=$?
+      [ "$rc" = 0 ] && { echo "$s"; return 0; }
       ;;
     wifi)
-      if wifi_try_connect "$DEVICE_IP"; then echo "$DEVICE_IP"; return 0; fi
-      # fallback: qualquer TCP já pareado
-      local t; t="$(adb_first_tcp_serial)"
-      [ -n "$t" ] && { echo "$t"; return 0; }
+      if [ -n "$DEVICE_IP" ]; then
+        wifi_try_connect "$DEVICE_IP" && { echo "$DEVICE_IP"; return 0; }
+        return 1
+      fi
+      s="$(adb_unique_tcp_serial)"; rc=$?
+      [ "$rc" = 0 ] && { echo "$s"; return 0; }
       ;;
     auto|*)
       # 1) USB conectado
-      local s; s="$(adb_first_usb_serial)"
-      [ -n "$s" ] && { echo "$s"; return 0; }
+      s="$(adb_unique_usb_serial)"; rc=$?
+      [ "$rc" = 0 ] && { echo "$s"; return 0; }
+      [ "$rc" = 2 ] && return 1
       # 2) IP salvo
       if [ -n "$DEVICE_IP" ] && wifi_try_connect "$DEVICE_IP"; then echo "$DEVICE_IP"; return 0; fi
-      # 3) qualquer TCP online
-      local t; t="$(adb_first_tcp_serial)"
-      [ -n "$t" ] && { echo "$t"; return 0; }
+      # 3) sem IP salvo, aceita somente um TCP inequivocamente identificável
+      if [ -z "$DEVICE_IP" ]; then
+        s="$(adb_unique_tcp_serial)"; rc=$?
+        [ "$rc" = 0 ] && { echo "$s"; return 0; }
+      fi
       ;;
   esac
   return 1
@@ -182,6 +276,7 @@ build_scrcpy_args() {
 # ---------------------------------------------------------------------------
 run_one_session() {
   local s="$1"
+  local started_at=$SECONDS
   build_scrcpy_args "$s"
   log_ok "Iniciando sessão em $s"
   log_info "scrcpy ${SCRCPY_ARGS[*]}"
@@ -190,9 +285,17 @@ run_one_session() {
   echo "$SCRCPY_PID" > "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
   wait "$SCRCPY_PID"
   local rc=$?
+  SESSION_DURATION=$((SECONDS - started_at))
   SCRCPY_PID=""
   rm -f "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
   return $rc
+}
+
+sleep_interruptible() {
+  sleep "$1" &
+  SLEEP_PID=$!
+  wait "$SLEEP_PID" 2>/dev/null || true
+  SLEEP_PID=""
 }
 
 supervisor() {
@@ -204,14 +307,24 @@ supervisor() {
       fi
       local d; d="$(adx_backoff "$attempt" "$BACKOFF_BASE" "$BACKOFF_CAP")"
       log_warn "Sem dispositivo. Nova tentativa em ${d}s (tentativa $((attempt+1)))..."
-      sleep "$d"; attempt=$((attempt+1))
+      sleep_interruptible "$d"; attempt=$((attempt+1))
       continue
     fi
 
-    attempt=0
+    [ -n "$PINNED_SERIAL" ] || PINNED_SERIAL="$TARGET_SERIAL"
+    load_device_profile "$TARGET_SERIAL"
+    select_runtime_mode "$TARGET_SERIAL"
     apply_desktop_tweaks "$TARGET_SERIAL"
     run_one_session "$TARGET_SERIAL"
     local rc=$?
+
+    if [ "$AUTO_MODE_SELECTED" = 1 ] && [ "$MODE" = dex ] && [ "$AUTO_DEX_FALLBACK_USED" = 0 ] && \
+       [ "$rc" != 0 ] && [ "$SESSION_DURATION" -lt "$HEALTHY_SESSION_SECONDS" ]; then
+      AUTO_DEX_FALLBACK_USED=1
+      MODE="mirror"
+      log_warn "Display virtual falhou rapidamente; tentando mirror uma vez antes de desistir."
+      continue
+    fi
 
     if [ "$SHOULD_RUN" != "1" ]; then break; fi
 
@@ -220,12 +333,18 @@ supervisor() {
       break
     fi
 
+    # Só uma sessão realmente estável perdoa falhas anteriores. Quedas rápidas
+    # mantêm o contador e aumentam o backoff em vez de criar um loop agressivo.
+    if [ "$SESSION_DURATION" -ge "$HEALTHY_SESSION_SECONDS" ]; then
+      attempt=0
+    fi
+
     # scrcpy saiu sozinho: cair para reconexão com backoff.
     local d; d="$(adx_backoff "$attempt" "$BACKOFF_BASE" "$BACKOFF_CAP")"
-    log_warn "Sessão caiu (rc=$rc). Tentando recuperar em ${d}s..."
+    log_warn "Sessão caiu após ${SESSION_DURATION}s (rc=$rc). Tentando recuperar em ${d}s..."
     # se era Wi-Fi, forçar reconexão do transporte
     if adx_is_tcp_serial "$TARGET_SERIAL"; then adb disconnect "$TARGET_SERIAL" >/dev/null 2>&1 || true; fi
-    sleep "$d"; attempt=$((attempt+1))
+    sleep_interruptible "$d"; attempt=$((attempt+1))
   done
 }
 
@@ -241,43 +360,136 @@ cmd_status() {
   printf '  DEVICE_IP   : %s\n' "${DEVICE_IP:-<vazio>}"
   printf '  dispositivos:\n'
   adb devices -l 2>/dev/null | sed '1d;/^$/d' | sed 's/^/    /'
-  if [ -f "$ADX_STATE_DIR/scrcpy.pid" ] && kill -0 "$(cat "$ADX_STATE_DIR/scrcpy.pid")" 2>/dev/null; then
-    printf '  sessão      : %sativa (pid %s)%s\n' "$C_GREEN" "$(cat "$ADX_STATE_DIR/scrcpy.pid")" "$C_RESET"
+  if read_supervisor_state && supervisor_state_is_live; then
+    printf '  supervisor  : %sativo (pid %s)%s\n' "$C_GREEN" "$STATE_PID" "$C_RESET"
   else
-    printf '  sessão      : inativa\n'
+    printf '  supervisor  : inativo\n'
   fi
 }
 
 cmd_stop() {
-  local pidf="$ADX_STATE_DIR/scrcpy.pid"
-  if [ -f "$pidf" ]; then
-    local p; p="$(cat "$pidf")"
-    kill "$p" 2>/dev/null && log_ok "Sessão $p encerrada." || log_warn "Nada para encerrar."
-    rm -f "$pidf"
+  local service_stopped=0
+  if have systemctl && systemctl --user is-active --quiet android-dex.service 2>/dev/null; then
+    systemctl --user stop android-dex.service || die "Não consegui parar android-dex.service."
+    service_stopped=1
+  fi
+
+  if read_supervisor_state && supervisor_state_is_live; then
+    local p="$STATE_PID" i
+    kill -TERM "$p" 2>/dev/null || die "Não consegui sinalizar o supervisor $p."
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      : "$i"
+      kill -0 "$p" 2>/dev/null || { log_ok "Supervisor $p encerrado."; return 0; }
+      sleep 0.2
+    done
+    die "O supervisor $p não encerrou no prazo; não forcei um PID sem nova validação."
+  fi
+  cleanup_stale_lock
+  if [ "$service_stopped" = 1 ]; then
+    log_ok "Serviço android-dex encerrado."
   else
-    # fallback: mata qualquer scrcpy nosso
-    pkill -f 'scrcpy .*android-dex' 2>/dev/null && log_ok "Sessões encerradas." || log_warn "Nenhuma sessão ativa."
+    log_warn "Nenhuma sessão ativa."
   fi
 }
 
 # ---------------------------------------------------------------------------
-# Encerramento limpo
+# Controle de instância e encerramento limpo
 # ---------------------------------------------------------------------------
+process_start_time() {
+  local p="$1"
+  [ -r "/proc/$p/stat" ] || return 1
+  awk '{print $22}' "/proc/$p/stat" 2>/dev/null
+}
+
+read_supervisor_state() {
+  STATE_PID=""; STATE_START=""; STATE_TOKEN=""
+  [ -f "$SUPERVISOR_STATE_FILE" ] || return 1
+  STATE_PID="$(sed -n 's/^pid=//p' "$SUPERVISOR_STATE_FILE" | head -n1)"
+  STATE_START="$(sed -n 's/^start=//p' "$SUPERVISOR_STATE_FILE" | head -n1)"
+  STATE_TOKEN="$(sed -n 's/^token=//p' "$SUPERVISOR_STATE_FILE" | head -n1)"
+  [[ "$STATE_PID" =~ ^[0-9]+$ ]] && [[ "$STATE_START" =~ ^[0-9]+$ ]] && [[ "$STATE_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
+supervisor_state_is_live() {
+  local current cmdline
+  kill -0 "$STATE_PID" 2>/dev/null || return 1
+  current="$(process_start_time "$STATE_PID")"
+  [ -n "$current" ] && [ "$current" = "$STATE_START" ] || return 1
+  cmdline="$(tr '\0' ' ' < "/proc/$STATE_PID/cmdline" 2>/dev/null)"
+  case "$cmdline" in *android-dex*) return 0;; *) return 1;; esac
+}
+
+cleanup_stale_lock() {
+  [ -f "$SUPERVISOR_STATE_FILE" ] || return 0
+  if read_supervisor_state && supervisor_state_is_live; then return 1; fi
+  rm -f "$SUPERVISOR_STATE_FILE" 2>/dev/null || true
+}
+
+acquire_session_lock() {
+  SESSION_TOKEN="${RANDOM}.$$.${SECONDS}"
+  local start candidate attempt
+  start="$(process_start_time "$$")"
+  [ -n "$start" ] || die "Não consegui validar a identidade do supervisor."
+  candidate="$ADX_STATE_DIR/.supervisor.$SESSION_TOKEN"
+  printf 'pid=%s\nstart=%s\ntoken=%s\n' "$$" "$start" "$SESSION_TOKEN" > "$candidate" || die "Não consegui preparar o estado do supervisor."
+
+  # O hard link publica um arquivo já completo com exclusão atômica, eliminando
+  # a janela de um lock criado porém ainda sem PID/identidade.
+  for attempt in 1 2 3; do
+    if ln "$candidate" "$SUPERVISOR_STATE_FILE" 2>/dev/null; then
+      rm -f "$candidate" 2>/dev/null || true
+      SESSION_LOCK_HELD=1
+      return 0
+    fi
+    if read_supervisor_state && supervisor_state_is_live; then
+      rm -f "$candidate" 2>/dev/null || true
+      die "android-dex já está em execução (supervisor $STATE_PID). Use --status ou --stop."
+    fi
+    cleanup_stale_lock
+  done
+  rm -f "$candidate" 2>/dev/null || true
+  die "Não consegui adquirir o lock atômico de sessão: $SUPERVISOR_STATE_FILE"
+}
+
+release_session_lock() {
+  [ "$SESSION_LOCK_HELD" = 1 ] || return 0
+  local stored=""
+  stored="$(sed -n 's/^token=//p' "$SUPERVISOR_STATE_FILE" 2>/dev/null | head -n1)"
+  if [ "$stored" = "$SESSION_TOKEN" ]; then
+    rm -f "$SUPERVISOR_STATE_FILE" 2>/dev/null || true
+  fi
+  SESSION_LOCK_HELD=0
+}
+
 cleanup() {
+  trap - EXIT INT TERM
   SHOULD_RUN=0
   if [ -n "$SCRCPY_PID" ] && kill -0 "$SCRCPY_PID" 2>/dev/null; then
     kill "$SCRCPY_PID" 2>/dev/null || true
     wait "$SCRCPY_PID" 2>/dev/null || true
   fi
+  if [ -n "$SLEEP_PID" ] && kill -0 "$SLEEP_PID" 2>/dev/null; then
+    kill "$SLEEP_PID" 2>/dev/null || true
+    wait "$SLEEP_PID" 2>/dev/null || true
+  fi
   [ -n "$TARGET_SERIAL" ] && restore_desktop_tweaks "$TARGET_SERIAL"
   rm -f "$ADX_STATE_DIR/scrcpy.pid" 2>/dev/null || true
+  release_session_lock
   log_info "Encerrado."
 }
-trap cleanup INT TERM EXIT
+
+handle_signal() {
+  SHOULD_RUN=0
+  [ -n "$SCRCPY_PID" ] && kill "$SCRCPY_PID" 2>/dev/null || true
+  [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null || true
+}
 
 # ---------------------------------------------------------------------------
 main() {
   parse_args "$@"
+  acquire_session_lock
+  trap handle_signal INT TERM
+  trap cleanup EXIT
   preflight
   supervisor
 }

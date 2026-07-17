@@ -12,6 +12,7 @@
 # Uso:
 #   android-dex-flash info                 # Fase 0 — leitura pura, risco ZERO
 #   android-dex-flash caps                 # o que é possível NESTE aparelho
+#   android-dex-flash verify-firmware DIR  # assinatura/hash/modelo; não grava
 #   android-dex-flash unlock [--commit]    # desbloqueia o bootloader (OEM-roteado)
 #   android-dex-flash root   [--commit]    # patch boot.img c/ Magisk + flash
 #   android-dex-flash flash-firmware PATH [--commit]   # grava firmware oficial
@@ -66,7 +67,7 @@ parse_globals() {
       --model)    shift; EXPECT_MODEL="${1:-}" ;;
       --yes)      ASSUME_YES=1 ;;
       -h|--help)  usage; exit 0 ;;
-      info|caps|unlock|root|flash-firmware|reboot-bootloader|restore-boot)
+      info|caps|verify-firmware|unlock|root|flash-firmware|reboot-bootloader|restore-boot)
         [ -z "$CMD" ] && CMD="$1" || POSITIONAL+=("$1") ;;
       *) POSITIONAL+=("$1") ;;
     esac
@@ -113,6 +114,7 @@ cmd_info() {
   load_driver "$FP_OEM"
   printf '\n%s-- Capacidades e riscos (%s) --%s\n' "$C_BOLD" "$FP_OEM" "$C_RESET"
   driver_caps
+  print_commit_policy
   printf '\n%sNada acima gravou no aparelho.%s Use "caps" p/ detalhes ou "unlock/root/flash-firmware" (com --dry-run).\n' "$C_DIM" "$C_RESET"
 }
 
@@ -143,6 +145,27 @@ cmd_caps() {
   load_driver "$FP_OEM"
   printf '%s== Capacidades para %s (%s) ==%s\n' "$C_BOLD" "${FP_MODEL:-?}" "$FP_OEM" "$C_RESET"
   driver_caps
+  print_commit_policy
+}
+
+cmd_verify_firmware() {
+  local input="${POSITIONAL[0]:-}"
+  fp_collect
+  verify_firmware_descriptor "$input" >/dev/null
+  log_ok "Descritor autenticado e compatível. Nenhuma partição foi gravada."
+}
+
+print_commit_policy() {
+  local action label
+  printf '\n%sPolítica de execução atual:%s\n' "$C_BOLD" "$C_RESET" >&2
+  for action in unlock root flash-firmware restore-boot; do
+    if declare -F driver_commit_supported >/dev/null 2>&1 && driver_commit_supported "$action"; then
+      label="--commit disponível"
+    else
+      label="somente roteiro guiado (fail-closed)"
+    fi
+    printf '  • %-16s %s\n' "$action" "$label" >&2
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -154,8 +177,16 @@ run_destructive() {
   load_driver "$FP_OEM"
 
   driver_warnings "$action"
+  if [ "$DRY_RUN" != "1" ]; then
+    if ! declare -F driver_commit_supported >/dev/null 2>&1 || ! driver_commit_supported "$action"; then
+      die "Execução automática de '$action' não é suportada com segurança pelo driver '$FP_OEM'. Use --dry-run para obter o roteiro guiado e a ferramenta oficial do fabricante para concluir a gravação."
+    fi
+  fi
   guard_require_destructive_optin
   guard_verify_model "$EXPECT_MODEL"
+  if [ "$action" = flash-firmware ] && [ -n "${1:-}" ]; then
+    verify_descriptor_if_present "$1"
+  fi
 
   if [ "$DRY_RUN" = "1" ]; then
     log_info "Modo dry-run: mostrando a sequência; nada será gravado."
@@ -177,8 +208,9 @@ run_destructive() {
 }
 
 cmd_reboot_bootloader() {
-  case "$(fp_transport)" in
-    adb)      run_or_echo adb reboot bootloader ;;
+  fp_collect
+  case "$FP_TRANSPORT" in
+    adb)      run_or_echo adb -s "$FP_ADB_SERIAL" reboot bootloader ;;
     fastboot) log_info "Já em fastboot." ;;
     *)        die "Sem transferência adb. Reinicie manualmente no bootloader (combinação de teclas do aparelho)." ;;
   esac
@@ -190,6 +222,7 @@ main() {
   case "${CMD:-info}" in
     info)              cmd_info ;;
     caps)              cmd_caps ;;
+    verify-firmware)   cmd_verify_firmware ;;
     unlock)            run_destructive unlock ;;
     root)              run_destructive root ;;
     flash-firmware)    run_destructive flash-firmware "${POSITIONAL[@]:-}" ;;

@@ -93,8 +93,13 @@ adx_load_config() {
     # shellcheck disable=SC1090
     set -a; . "$ADX_CONFIG_FILE"; set +a
   fi
+  # Registra o que veio explicitamente de config/ambiente para que perfis de
+  # aparelho só preencham lacunas e nunca sobrescrevam escolhas do usuário.
+  [ "${START_APP+x}" = x ] && ADX_USER_START_APP_SET=1 || ADX_USER_START_APP_SET=0
+  [ "${VD_SYSTEM_DECORATIONS+x}" = x ] && ADX_USER_DECORATIONS_SET=1 || ADX_USER_DECORATIONS_SET=0
+  [ "${ENABLE_FREEFORM_TWEAKS+x}" = x ] && ADX_USER_FREEFORM_SET=1 || ADX_USER_FREEFORM_SET=0
   # Defaults (só aplicados se o config não definiu)
-  : "${MODE:=dex}"                 # dex | mirror
+  : "${MODE:=auto}"                # auto | dex | mirror
   : "${CONNECTION:=auto}"          # auto | usb | wifi
   : "${DEVICE_IP:=}"               # ex.: 192.168.1.100:5555
   : "${DEVICE_SERIAL:=}"           # força um serial específico
@@ -112,6 +117,8 @@ adx_load_config() {
   : "${RECONNECT:=1}"              # supervisor auto-reconecta
   : "${BACKOFF_BASE:=2}"
   : "${BACKOFF_CAP:=30}"
+  : "${HEALTHY_SESSION_SECONDS:=15}" # só zera backoff após sessão estável
+  : "${AUTO_DEX_MIN_SDK:=35}"       # Android 15; política auto conservadora
   : "${WINDOW_TITLE:=Android DEX}"
   : "${EXTRA_ARGS:=}"
 }
@@ -124,15 +131,38 @@ adb_ensure_server() {
   adb start-server >/dev/null 2>&1 || true
 }
 
-# Ecoa o serial do primeiro dispositivo USB (device state), ou vazio.
-adb_first_usb_serial() {
-  adb devices 2>/dev/null | awk 'NR>1 && $2=="device" && $1 !~ /:[0-9]+$/ {print $1; exit}'
+# Lista os seriais online por transporte, um por linha.
+adb_usb_serials() {
+  adb devices 2>/dev/null | awk 'NR>1 && $2=="device" && $1 !~ /:[0-9]+$/ {print $1}'
 }
 
-# Ecoa o serial do primeiro dispositivo TCP (IP:porta) em estado "device".
-adb_first_tcp_serial() {
-  adb devices 2>/dev/null | awk 'NR>1 && $2=="device" && $1 ~ /:[0-9]+$/ {print $1; exit}'
+adb_tcp_serials() {
+  adb devices 2>/dev/null | awk 'NR>1 && $2=="device" && $1 ~ /:[0-9]+$/ {print $1}'
 }
+
+# Ecoa um serial somente quando há exatamente um candidato. Retorno 2 significa
+# ambiguidade e deve bloquear fallbacks para outro transporte/dispositivo.
+_adb_unique_serial_from() {
+  local kind="$1" serial="" item count=0
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    serial="$item"
+    count=$((count + 1))
+  done
+  case "$count" in
+    0) return 1 ;;
+    1) printf '%s\n' "$serial" ;;
+    *) log_error "Há $count dispositivos $kind online. Defina DEVICE_SERIAL explicitamente para evitar selecionar o aparelho errado."; return 2 ;;
+  esac
+}
+
+adb_unique_usb_serial() { adb_usb_serials | _adb_unique_serial_from USB; }
+adb_unique_tcp_serial() { adb_tcp_serials | _adb_unique_serial_from TCP/IP; }
+
+# Compatibilidade com scripts externos antigos. Novos fluxos devem preferir os
+# helpers unique acima para não selecionar silenciosamente o primeiro aparelho.
+adb_first_usb_serial() { adb_usb_serials | head -n1; }
+adb_first_tcp_serial() { adb_tcp_serials | head -n1; }
 
 # Verdadeiro se o serial dado está em estado "device".
 adb_serial_online() {

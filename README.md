@@ -26,8 +26,8 @@ Um workspace com **dois projetos que compartilham a mesma fundação** (`lib/com
 
 | Projeto | O que faz | Risco | Root? |
 | :-- | :-- | :--: | :--: |
-| 🖥️ **[android-dex-kit](android-dex-kit/)** | Experiência **desktop/DeX** de um Android conectado, via `scrcpy + ADB`. Supervisor resiliente que reconecta sozinho, integração com menu, systemd e udev. | 🟢 baixo | ❌ não |
-| 🔧 **[android-dex-flash](android-dex-flash/)** | **Manutenção do aparelho**: diagnóstico, desbloqueio de bootloader, root (Magisk) e flash de firmware — orquestrando as ferramentas **oficiais** de cada marca. | 🔴 alto | ⚠️ opcional |
+| 🖥️ **[android-dex-kit](android-dex-kit/)** | Experiência **desktop/DeX** via `scrcpy + ADB`, com modo automático, perfis OEM, supervisor resiliente, systemd e udev. | 🟢 baixo | ❌ não |
+| 🔧 **[android-dex-flash](android-dex-flash/)** | Diagnóstico e manutenção guiada, com bundles não executáveis e descritores assinados; gravações sem validação permanecem bloqueadas. | 🔴 alto | ⚠️ opcional |
 
 > [!NOTE]
 > São **separados de propósito**: espelhar a tela é inofensivo; mexer em bootloader e partições pode **brickar** o aparelho. A separação evita apertar o botão errado.
@@ -81,7 +81,9 @@ flowchart TD
 
 ## 🖥️ android-dex — desktop sem root
 
-Modo **DeX** (display virtual separado, estilo desktop) em `scrcpy ≥ 3.0` com Android Desktop Mode, ou **espelhamento** em qualquer versão. Funciona por **USB ou Wi-Fi** e **reconecta sozinho** com backoff exponencial se a conexão cair.
+Modo automático tenta **DeX** somente quando SDK/capacidades o sustentam e cai
+para **mirror** quando houver dúvida ou falha rápida. Perfis OEM ajustam launcher
+e decorações; USB/Wi-Fi reconectam com backoff exponencial.
 
 <details open>
 <summary><b>Instalar e usar (30 segundos)</b></summary>
@@ -129,7 +131,8 @@ android-dex-flash caps       # capacidades e riscos do seu modelo
 
 # ações que gravam — dry-run por padrão:
 android-dex-flash unlock             # simula (mostra a sequência exata)
-android-dex-flash unlock --commit    # executa (pede bateria/modelo/"SIM")
+android-dex-flash unlock --commit    # só em drivers dedicados certificados
+android-dex-flash flash-firmware DIR # roteiro guiado; não executa scripts
 ```
 </details>
 
@@ -167,7 +170,8 @@ ação destrutiva
    └─ fingerprint do device ......... quem é o aparelho?
    └─ avisos por OEM ................ o que você perde?
    └─ --dry-run (padrão) ............ mostra os comandos, não grava
-        └─ --commit
+        └─ driver permite --commit? . root/firmware/restore: não (fail-closed)
+        └─ --commit (somente ação certificada)
              └─ bateria ≥ 40% ....... trava se estiver baixa
              └─ modelo confere ...... recusa firmware de outro modelo
              └─ hash sha256 ......... integridade dos insumos

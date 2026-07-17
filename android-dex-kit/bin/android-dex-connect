@@ -37,8 +37,18 @@ persist_ip() {
 }
 
 migrate_from_usb() {
-  local s; s="$(adb_first_usb_serial)"
-  [ -n "$s" ] || die "Nenhum dispositivo USB em estado 'device'. Conecte por cabo e autorize a depuração."
+  local s rc=0
+  if [ -n "$DEVICE_SERIAL" ]; then
+    adb_serial_online "$DEVICE_SERIAL" || die "DEVICE_SERIAL='$DEVICE_SERIAL' não está online. Não selecionarei outro aparelho."
+    adx_is_tcp_serial "$DEVICE_SERIAL" && die "DEVICE_SERIAL='$DEVICE_SERIAL' é TCP/IP; informe o serial USB para migrar."
+    s="$DEVICE_SERIAL"
+  else
+    s="$(adb_unique_usb_serial)"; rc=$?
+    [ "$rc" = 0 ] || {
+      [ "$rc" = 2 ] && die "Seleção USB ambígua. Defina DEVICE_SERIAL no config e tente novamente."
+      die "Nenhum dispositivo USB em estado 'device'. Conecte por cabo e autorize a depuração."
+    }
+  fi
   log_step "Migrando $s de USB para Wi-Fi"
   local ip
   ip="$(adb -s "$s" shell ip route 2>/dev/null | awk '/wlan0/ {print $9; exit}')"
@@ -106,7 +116,11 @@ main() {
     -h|--help)  sed -n '2,15p' "$_self" | sed 's/^# \{0,1\}//' ;;
     *:*[0-9])   pair_manual "$1" "${2:-}" ;;
     "")
-      if [ -n "$(adb_first_usb_serial)" ]; then
+      local rc=0
+      adb_unique_usb_serial >/dev/null; rc=$?
+      if [ "$rc" = 2 ]; then
+        die "Há vários dispositivos USB. Defina DEVICE_SERIAL para escolher explicitamente."
+      elif [ "$rc" = 0 ]; then
         log_info "Dispositivo USB detectado."
         printf 'Migrar do USB para Wi-Fi automaticamente? [S/n] ' >&2; read -r ans
         case "${ans:-S}" in [Nn]*) pair_manual ;; *) migrate_from_usb ;; esac

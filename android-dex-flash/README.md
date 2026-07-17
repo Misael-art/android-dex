@@ -20,7 +20,11 @@ botão errado — e dá a esta ferramenta um ciclo de consentimento próprio.
 
 ## Modelo de segurança (o que torna "amigável e seguro" real)
 
-- **`--dry-run` é o padrão.** Nenhuma ação grava nada até você passar `--commit`.
+- **`--dry-run` é o padrão.** Root, firmware e restauração são atualmente
+  **guiados e fail-closed**: não aceitam `--commit` até existirem descritores
+  verificáveis por modelo/partição.
+- **Bundles são dados, nunca código.** `flash-all.sh`/`flash_all.sh` contidos em
+  pacotes de firmware jamais são executados pela ferramenta.
 - **Consentimento digitado.** Antes de gravar, você digita `SIM` (não aceita `y`).
 - **Guard rails** antes de qualquer gravação:
   - confere que o **modelo** bate com o esperado (`--model`), evitando firmware
@@ -57,15 +61,16 @@ Comece **sempre** pelo diagnóstico — ele nunca grava nada:
 ```bash
 android-dex-flash info     # marca/modelo/SO/bootloader + o que é possível/se perde
 android-dex-flash caps     # capacidades e riscos detalhados do seu modelo
+android-dex-flash verify-firmware DIR # assinatura, hash e identidade; não grava
 ```
 
-Ações que gravam (todas em dry-run por padrão):
+Ações e roteiros (todos em dry-run por padrão):
 
 ```bash
 android-dex-flash unlock                 # simula o desbloqueio (mostra a sequência)
-android-dex-flash unlock --commit        # executa (pede bateria/modelo/"SIM")
-android-dex-flash root --commit          # patch boot.img (Magisk) + flash
-android-dex-flash flash-firmware DIR --commit   # grava firmware oficial
+android-dex-flash unlock --commit        # só em drivers dedicados certificados
+android-dex-flash root                   # valida insumos e mostra o roteiro Magisk
+android-dex-flash flash-firmware DIR     # valida o tipo do pacote e orienta
 android-dex-flash reboot-bootloader      # reinicia p/ fastboot/download
 android-dex-flash --model sunfish unlock --commit   # trava o modelo esperado
 ```
@@ -85,16 +90,16 @@ Motorola, etc.) são informados por variáveis no
 | **Motorola/Lenovo** | código do site oficial | 2 passos: `get_unlock_data` → código por e-mail → `oem unlock <código>`. |
 | **OnePlus/OPPO/Realme/Sony** | `fastboot flashing unlock` | OPPO/Realme podem exigir app oficial "In-Depth Test"; Sony perde DRM. |
 
-Fabricante não mapeado cai no driver **genérico** (fluxo AOSP/fastboot), com
-avisos mais conservadores.
+Fabricante não mapeado cai no driver **genérico** em modo somente guiado:
+nenhuma ação destrutiva aceita `--commit`.
 
 ## Root (Magisk) — como funciona aqui
 
 O método moderno e **reversível**: pegue o `boot.img` de **estoque** do firmware
 que está no aparelho, corrija-o com o app **Magisk** (`magisk_patched.img`) e
-grave com `fastboot flash boot`. A ferramenta empurra o `boot.img`, aceita o
-`PATCHED_IMG` de volta, verifica hash (se informado), faz backup best-effort e
-grava. Restaurar o boot de estoque remove o root.
+grave com o procedimento oficial do modelo. A ferramenta aceita o `PATCHED_IMG`,
+verifica hash (se informado) e mostra a sequência, mas neste estágio não grava
+automaticamente. Restaurar o boot de estoque remove o root.
 
 ## Firmware
 
@@ -105,12 +110,23 @@ grava. Restaurar o boot de estoque remove o root.
 - **OnePlus/OPPO:** `payload.bin` de OTA (payload-dumper) + fastboot.
 
 A ferramenta **não hospeda nem baixa firmware**: você aponta para o pacote
-oficial do seu modelo. Ela verifica modelo/hash e delega ao script/protocolo
-oficial.
+oficial do seu modelo. Ela identifica o formato e orienta as verificações, mas
+não executa scripts do bundle nem grava partições automaticamente. A conclusão
+é feita na ferramenta oficial do fabricante.
+
+Bundles podem trazer `firmware.manifest` + `firmware.manifest.sig`. O comando
+`verify-firmware` verifica assinatura OpenSSL contra uma chave pública colocada
+explicitamente em `~/.config/android-dex-flash/trusted-keys/`, confere SHA-256 e
+vincula OEM/modelo/codename ao único aparelho selecionado. O formato e o comando
+de assinatura estão em [`firmware/README.md`](firmware/README.md). Região,
+anti-rollback e plano de partições ainda são informativos, portanto até um
+manifesto válido permanece sem permissão de gravação automática.
 
 ## Limites honestos (o que ela NÃO faz)
 
 - Não burla espera de unlock (Xiaomi), login de conta, nem proteção de operadora.
+- Não executa root/firmware/restore em `--commit` sem descritores validados por
+  modelo, região, revisão de bootloader e layout de partições.
 - Não desbloqueia aparelhos que o fabricante travou (muitos Galaxy Snapdragon,
   Huawei pós-2018, bootloaders de operadora).
 - Não impede brick por firmware errado além dos guard rails — por isso os avisos.

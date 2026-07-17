@@ -1,0 +1,8 @@
+format=android-dex-firmware-v1
+oem=pixel
+model=Pixel 8
+device=shiba
+region=global
+bootloader=shiba-15.0
+artifact=factory-image.zip
+sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

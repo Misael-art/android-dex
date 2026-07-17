@@ -5,6 +5,7 @@ set -uo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEX_BIN="$ROOT_DIR/android-dex-kit/bin/android-dex"
+CONNECT_BIN="$ROOT_DIR/android-dex-kit/bin/android-dex-connect"
 FLASH_BIN="$ROOT_DIR/android-dex-flash/bin/android-dex-flash"
 TMP_ROOT="$(mktemp -d)"
 MOCK_BIN="$TMP_ROOT/bin"
@@ -32,7 +33,19 @@ case "${1:-}" in
     printf 'List of devices attached\n'
     [ -f "${MOCK_ADB_DEVICES:-}" ] && /bin/cat "$MOCK_ADB_DEVICES"
     ;;
-  connect|disconnect|pair) exit 0 ;;
+  connect)
+    printf 'connect %s\n' "${2:-}" >> "${MOCK_ADB_LOG:-/dev/null}"
+    exit 0
+    ;;
+  disconnect)
+    printf 'disconnect %s\n' "${2:-}" >> "${MOCK_ADB_LOG:-/dev/null}"
+    exit 0
+    ;;
+  pair) exit 0 ;;
+  mdns)
+    [ "${2:-}" = services ] && [ -f "${MOCK_ADB_MDNS:-}" ] && /bin/cat "$MOCK_ADB_MDNS"
+    exit 0
+    ;;
   -s)
     serial="${2:-}"; shift 2
     if [ "${1:-}" = shell ]; then
@@ -51,10 +64,38 @@ case "${1:-}" in
           [ "${2:-}" = package ] && [ "${3:-}" = has-feature ] && printf '%s\n' "${MOCK_SECONDARY_FEATURE:-false}"
           ;;
         settings)
-          case "${4:-}" in
-            force_desktop_mode_on_external_displays) printf '%s\n' "${MOCK_FORCE_DESKTOP:-null}" ;;
-            enable_freeform_support) printf '%s\n' "${MOCK_FREEFORM:-null}" ;;
-          esac
+          operation="${2:-}"; key="${4:-}"; value="${5:-}"
+          if [ "$operation" = get ]; then
+            if [ -f "${MOCK_SETTINGS_FILE:-}" ] && grep -q "^${key}=" "$MOCK_SETTINGS_FILE"; then
+              sed -n "s/^${key}=//p" "$MOCK_SETTINGS_FILE" | head -n1
+            else
+              case "$key" in
+                force_desktop_mode_on_external_displays) printf '%s\n' "${MOCK_FORCE_DESKTOP:-null}" ;;
+                enable_freeform_support) printf '%s\n' "${MOCK_FREEFORM:-null}" ;;
+                enable_non_resizable_multi_window) printf '%s\n' "${MOCK_NON_RESIZABLE:-null}" ;;
+                *) printf 'null\n' ;;
+              esac
+            fi
+          elif [ "$operation" = put ]; then
+            printf 'settings put %s %s\n' "$key" "$value" >> "${MOCK_ADB_LOG:-/dev/null}"
+            [ "${MOCK_FAIL_SETTING:-}" = "$key" ] && exit 1
+            if [ -n "${MOCK_SETTINGS_FILE:-}" ]; then
+              touch "$MOCK_SETTINGS_FILE"
+              sed -i "/^${key}=/d" "$MOCK_SETTINGS_FILE"
+              printf '%s=%s\n' "$key" "$value" >> "$MOCK_SETTINGS_FILE"
+            fi
+          elif [ "$operation" = delete ]; then
+            printf 'settings delete %s\n' "$key" >> "${MOCK_ADB_LOG:-/dev/null}"
+            [ "${MOCK_FAIL_SETTING:-}" = "$key" ] && exit 1
+            [ -n "${MOCK_SETTINGS_FILE:-}" ] && [ -f "$MOCK_SETTINGS_FILE" ] && sed -i "/^${key}=/d" "$MOCK_SETTINGS_FILE"
+          fi
+          ;;
+        ip)
+          if [ "${2:-}" = route ]; then
+            printf '192.168.1.0/24 dev wlan0 proto kernel scope link src %s\n' "${MOCK_DEVICE_IP:-192.168.1.50}"
+          elif [ "${2:-}" = -f ]; then
+            printf '    inet %s/24 brd 192.168.1.255 scope global wlan0\n' "${MOCK_DEVICE_IP:-192.168.1.50}"
+          fi
           ;;
         pm)
           if [ "${2:-}" = path ]; then
@@ -65,7 +106,11 @@ case "${1:-}" in
       exit 0
     fi
     case "${1:-}" in
-      shell|tcpip) exit 0 ;;
+      tcpip)
+        printf '%s tcpip %s\n' "$serial" "${2:-}" >> "${MOCK_ADB_LOG:-/dev/null}"
+        exit 0
+        ;;
+      shell) exit 0 ;;
     esac
     ;;
   shell) exit 0 ;;
@@ -141,7 +186,19 @@ run_dex() {
     MOCK_MANUFACTURER="${MOCK_MANUFACTURER:-Google}" MOCK_BRAND="${MOCK_BRAND:-google}" \
     MOCK_MODEL="${MOCK_MODEL:-Pixel8}" MOCK_DEVICE="${MOCK_DEVICE:-shiba}" MOCK_SDK="${MOCK_SDK:-35}" \
     MOCK_SECONDARY_FEATURE="${MOCK_SECONDARY_FEATURE:-false}" MOCK_PACKAGES="${MOCK_PACKAGES:-}" \
+    MOCK_SETTINGS_FILE="$dir/settings.state" MOCK_ADB_LOG="$dir/adb.log" \
+    MOCK_ADB_MDNS="$dir/adb.mdns" MOCK_DEVICE_IP="${MOCK_DEVICE_IP:-192.168.1.50}" \
+    MOCK_FAIL_SETTING="${MOCK_FAIL_SETTING:-}" \
     bash "$DEX_BIN" "$@"
+}
+
+run_connect() {
+  local dir="$1"; shift
+  env HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" \
+    XDG_DATA_HOME="$dir/data" PATH="$MOCK_BIN:$PATH" MOCK_ADB_DEVICES="$dir/adb.devices" \
+    MOCK_ADB_LOG="$dir/adb.log" MOCK_ADB_MDNS="$dir/adb.mdns" \
+    MOCK_DEVICE_IP="${MOCK_DEVICE_IP:-192.168.1.50}" \
+    bash "$CONNECT_BIN" "$@"
 }
 
 run_flash() {
@@ -286,12 +343,80 @@ test_ambiguous_or_offline_identity_blocks_session() {
   printf 'PHONE-A\tdevice\nPHONE-B\tdevice\n' > "$dir/adb.devices"
   run_dex "$dir" --once >"$out" 2>&1 && { printf 'dois devices foram aceitos\n' >&2; return 1; }
   assert_no_scrcpy "$dir" || return 1
-  grep -q "Defina DEVICE_SERIAL" "$out" || return 1
+  grep -q "Use --list e --device SERIAL" "$out" || return 1
 
   printf 'DEVICE_SERIAL="PHONE-X"\n' >> "$dir/config/android-dex/config.env"
   printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
   run_dex "$dir" --once >"$out" 2>&1 && { printf 'serial offline caiu para outro device\n' >&2; return 1; }
   assert_no_scrcpy "$dir" && grep -q "não selecionarei outro aparelho" "$out"
+}
+
+test_device_listing_and_explicit_selection() {
+  local dir out
+  dir="$(new_case device-selector)"; write_dex_config "$dir"; out="$dir/out"
+  printf 'PHONE-A\tdevice product:husky model:Pixel_8_Pro device:husky\nPHONE-B\tdevice product:e3q model:SM-S928B device:e3q\n' > "$dir/adb.devices"
+  run_dex "$dir" --list >"$out" 2>&1 || return 1
+  grep -q 'PHONE-A' "$out" && grep -q 'Pixel_8_Pro' "$out" || return 1
+  grep -q 'PHONE-B' "$out" && grep -q 'SM-S928B' "$out" || return 1
+
+  run_dex "$dir" --device PHONE-B --once >"$out" 2>&1 || return 1
+  grep -q -- '-s PHONE-B' "$dir/scrcpy.log"
+}
+
+test_wifi_dynamic_port_and_mdns_discovery() {
+  local dir out
+  dir="$(new_case wifi-dynamic)"; write_dex_config "$dir"; out="$dir/out"
+  printf 'PHONE-A\tdevice model:Pixel_8\n192.168.1.50:43210\tdevice model:Pixel_8\n192.168.1.50:37123\tdevice model:Pixel_8\n' > "$dir/adb.devices"
+  printf 'adb-serial._adb-tls-connect._tcp. 192.168.1.50:37123\n' > "$dir/adb.mdns"
+
+  run_connect "$dir" --from-usb --device PHONE-A --port 43210 >"$out" 2>&1 || { cat "$out" >&2; return 1; }
+  grep -q '^PHONE-A tcpip 43210$' "$dir/adb.log" || return 1
+  grep -q 'DEVICE_IP="192.168.1.50:43210"' "$dir/config/android-dex/config.env" || return 1
+
+  run_connect "$dir" --discover >"$out" 2>&1 || return 1
+  grep -q '192.168.1.50:37123' "$out" || return 1
+  printf '123456\n' | run_connect "$dir" 192.168.1.50:39999 >"$out" 2>&1 || return 1
+  grep -q 'descoberto por mDNS: 192.168.1.50:37123' "$out" || return 1
+  grep -q 'DEVICE_IP="192.168.1.50:37123"' "$dir/config/android-dex/config.env"
+}
+
+test_tweaks_restore_exact_previous_state() {
+  local dir out snapshot_count
+  dir="$(new_case tweaks)"; write_dex_config "$dir"; out="$dir/out"
+  sed -i 's/ENABLE_FREEFORM_TWEAKS="0"/ENABLE_FREEFORM_TWEAKS="1"/' "$dir/config/android-dex/config.env"
+  printf 'PHONE-A\tdevice model:Pixel_8\n' > "$dir/adb.devices"
+  printf 'enable_freeform_support=0\nenable_non_resizable_multi_window=7\n' > "$dir/settings.state"
+
+  run_dex "$dir" --device PHONE-A --once >"$out" 2>&1 || return 1
+  grep -q 'persistem no aparelho' "$out" || return 1
+  [ "$(grep -c '=1$' "$dir/settings.state")" -eq 3 ] || return 1
+  snapshot_count="$(find "$dir/state/android-dex/tweaks" -type f | wc -l)"
+  [ "$snapshot_count" -eq 1 ] || return 1
+
+  run_dex "$dir" --device PHONE-A --restore-tweaks >"$out" 2>&1 || return 1
+  grep -q '^enable_freeform_support=0$' "$dir/settings.state" || return 1
+  grep -q '^enable_non_resizable_multi_window=7$' "$dir/settings.state" || return 1
+  ! grep -q '^force_desktop_mode_on_external_displays=' "$dir/settings.state" || return 1
+  [ "$(find "$dir/state/android-dex/tweaks" -type f | wc -l)" -eq 0 ] || return 1
+
+  # Um DeX automático que falha rápido deve restaurar antes de cair para mirror.
+  sed -i 's/MODE="dex"/MODE="auto"/' "$dir/config/android-dex/config.env"
+  MOCK_SECONDARY_FEATURE=true run_dex "$dir" --device PHONE-A --once >"$out" 2>&1 || return 1
+  grep -q 'fallback para mirror' "$out" && return 1
+  grep -q 'tentando mirror' "$out" || return 1
+  grep -q '^enable_freeform_support=0$' "$dir/settings.state" || return 1
+  grep -q '^enable_non_resizable_multi_window=7$' "$dir/settings.state" || return 1
+  ! grep -q '^force_desktop_mode_on_external_displays=' "$dir/settings.state" || return 1
+  [ "$(find "$dir/state/android-dex/tweaks" -type f | wc -l)" -eq 0 ]
+}
+
+test_debug_reports_nonfatal_failures() {
+  local dir out
+  dir="$(new_case debug)"; write_dex_config "$dir"; out="$dir/out"
+  sed -i 's/ENABLE_FREEFORM_TWEAKS="0"/ENABLE_FREEFORM_TWEAKS="1"/' "$dir/config/android-dex/config.env"
+  printf 'PHONE-A\tdevice model:Pixel_8\n' > "$dir/adb.devices"
+  MOCK_FAIL_SETTING=enable_freeform_support ADX_DEBUG=1 run_dex "$dir" --once >"$out" 2>&1 || return 1
+  grep -q '\[DEBUG\].*settings.*enable_freeform_support' "$out"
 }
 
 wait_for_file() {
@@ -360,6 +485,10 @@ run_test "modo automático e perfil OEM" test_auto_mode_and_oem_profile
 run_test "descritor de firmware assinado" test_signed_firmware_descriptor
 run_test "flash exige identidade única" test_flash_identity_requires_unique_device
 run_test "identidade ambígua/offline bloqueia sessão" test_ambiguous_or_offline_identity_blocks_session
+run_test "listagem e seleção explícita de aparelho" test_device_listing_and_explicit_selection
+run_test "porta Wi-Fi dinâmica e descoberta mDNS" test_wifi_dynamic_port_and_mdns_discovery
+run_test "tweaks restauram exatamente o estado anterior" test_tweaks_restore_exact_previous_state
+run_test "ADX_DEBUG registra falhas não fatais" test_debug_reports_nonfatal_failures
 run_test "instância única e --stop encerram supervisor" test_single_instance_and_stop_supervisor
 run_test "backoff cresce após quedas rápidas" test_backoff_grows_after_fast_failures
 

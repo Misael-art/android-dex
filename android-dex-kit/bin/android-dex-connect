@@ -8,8 +8,9 @@
 #
 # Uso:
 #   android-dex-connect                 # interativo
-#   android-dex-connect --from-usb      # migra o USB atual para Wi-Fi
-#   android-dex-connect 192.168.1.50:37000 123456   # pair direto (IP:porta + código)
+#   android-dex-connect --from-usb [--port PORTA] # migra USB para Wi-Fi
+#   android-dex-connect --discover      # lista endpoints mDNS do Android 11+
+#   android-dex-connect 192.168.1.50:37000 # pareia; solicita o código sem ecoá-lo
 set -uo pipefail
 
 _self="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -26,6 +27,7 @@ adb_ensure_server
 
 persist_ip() {
   local ip="$1"
+  adx_valid_endpoint "$ip" || die "Endpoint de conexão inválido: '$ip'."
   mkdir -p "$ADX_CONFIG_DIR"
   touch "$ADX_CONFIG_FILE"
   if grep -q '^DEVICE_IP=' "$ADX_CONFIG_FILE" 2>/dev/null; then
@@ -37,15 +39,16 @@ persist_ip() {
 }
 
 migrate_from_usb() {
-  local s rc=0
+  local s rc=0 endpoint
+  adx_valid_port "$ADB_TCP_PORT" || die "ADB_TCP_PORT/--port deve estar entre 1 e 65535."
   if [ -n "$DEVICE_SERIAL" ]; then
     adb_serial_online "$DEVICE_SERIAL" || die "DEVICE_SERIAL='$DEVICE_SERIAL' não está online. Não selecionarei outro aparelho."
     adx_is_tcp_serial "$DEVICE_SERIAL" && die "DEVICE_SERIAL='$DEVICE_SERIAL' é TCP/IP; informe o serial USB para migrar."
     s="$DEVICE_SERIAL"
   else
-    s="$(adb_unique_usb_serial)"; rc=$?
+    s="$(adb_choose_serial USB)"; rc=$?
     [ "$rc" = 0 ] || {
-      [ "$rc" = 2 ] && die "Seleção USB ambígua. Defina DEVICE_SERIAL no config e tente novamente."
+      [ "$rc" = 2 ] && die "Seleção USB cancelada/ambígua. Use --device SERIAL e tente novamente."
       die "Nenhum dispositivo USB em estado 'device'. Conecte por cabo e autorize a depuração."
     }
   fi
@@ -55,16 +58,39 @@ migrate_from_usb() {
   [ -n "$ip" ] || ip="$(adb -s "$s" shell ip -f inet addr show wlan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1)"
   [ -n "$ip" ] || die "Não consegui descobrir o IP Wi-Fi do aparelho. Verifique se o Wi-Fi está ligado."
   log_info "IP do aparelho: $ip"
-  adb -s "$s" tcpip 5555 >/dev/null 2>&1 || die "Falha ao ativar modo TCP/IP no aparelho."
+  endpoint="$ip:$ADB_TCP_PORT"
+  adb -s "$s" tcpip "$ADB_TCP_PORT" >/dev/null 2>&1 || die "Falha ao ativar modo TCP/IP na porta $ADB_TCP_PORT."
   sleep 2
-  adb connect "$ip:5555" >/dev/null 2>&1 || true
+  adx_try_quiet adb connect "$endpoint" || true
   sleep 1
-  if adb_serial_online "$ip:5555"; then
-    persist_ip "$ip:5555"
-    log_ok "Conectado por Wi-Fi em $ip:5555. Pode desconectar o cabo."
+  if adb_serial_online "$endpoint"; then
+    persist_ip "$endpoint"
+    log_ok "Conectado por Wi-Fi em $endpoint. Pode desconectar o cabo."
   else
     die "Conexão TCP falhou. Confira firewall/rede e tente novamente."
   fi
+}
+
+discover_endpoint_with_retry() {
+  local host="$1" endpoint attempt rc=1
+  for attempt in 1 2 3; do
+    endpoint="$(adb_discover_connect_endpoint "$host")"; rc=$?
+    [ "$rc" = 0 ] && { printf '%s\n' "$endpoint"; return 0; }
+    [ "$rc" = 2 ] && return 2
+    sleep 1
+  done
+  return 1
+}
+
+list_mdns_endpoints() {
+  local found=0 endpoint
+  printf '%-32s %s\n' 'ENDPOINT' 'SERVIÇO'
+  while IFS= read -r endpoint; do
+    [ -n "$endpoint" ] || continue
+    printf '%-32s %s\n' "$endpoint" '_adb-tls-connect._tcp'
+    found=1
+  done < <(adb_mdns_connect_endpoints)
+  [ "$found" = 1 ] || printf '%s\n' 'Nenhum endpoint de conexão mDNS encontrado.'
 }
 
 pair_manual() {
@@ -81,26 +107,36 @@ TXT
     printf 'Endereço de emparelhamento (IP:PORTA): ' >&2; read -r pair_addr
   fi
   if [ -z "$code" ]; then
-    printf 'Código de 6 dígitos: ' >&2; read -r code
+    printf 'Código de 6 dígitos: ' >&2; read -rs code; printf '\n' >&2
   fi
   if [ -z "$pair_addr" ] || [ -z "$code" ]; then die "IP:porta e código são obrigatórios."; fi
+  adx_valid_endpoint "$pair_addr" || die "Endereço de pareamento inválido: '$pair_addr'."
+  [[ "$code" =~ ^[0-9]{6}$ ]] || die "O código de pareamento deve conter exatamente 6 dígitos."
 
   log_step "Emparelhando com $pair_addr"
-  if adb pair "$pair_addr" "$code"; then
+  # O código vai pelo stdin para não aparecer na lista de processos do host.
+  if printf '%s\n' "$code" | adb pair "$pair_addr"; then
     log_ok "Emparelhado."
   else
     die "Emparelhamento falhou. Verifique IP:porta e o código (eles mudam a cada abertura da tela)."
   fi
 
   # A porta de CONEXÃO é diferente da de emparelhamento — pedir/derivar.
-  local host connect_addr
-  host="${pair_addr%%:*}"
-  printf 'Endereço de CONEXÃO (IP:PORTA, veja no topo da tela de Depuração sem fio) [%s:5555]: ' "$host" >&2
-  read -r connect_addr
-  [ -n "$connect_addr" ] || connect_addr="$host:5555"
+  local host connect_addr rc=0
+  host="${pair_addr%:*}"
+  connect_addr="$(discover_endpoint_with_retry "$host")"; rc=$?
+  if [ "$rc" = 0 ]; then
+    log_ok "Endpoint de conexão descoberto por mDNS: $connect_addr"
+  else
+    [ "$rc" = 2 ] && list_mdns_endpoints >&2
+    printf 'Endereço de CONEXÃO (IP:PORTA, diferente da porta de pareamento) [%s:%s]: ' "$host" "$ADB_TCP_PORT" >&2
+    read -r connect_addr
+    [ -n "$connect_addr" ] || connect_addr="$host:$ADB_TCP_PORT"
+  fi
+  adx_valid_endpoint "$connect_addr" || die "Endereço de conexão inválido: '$connect_addr'."
 
   log_step "Conectando em $connect_addr"
-  adb connect "$connect_addr" >/dev/null 2>&1 || true
+  adx_try_quiet adb connect "$connect_addr" || true
   sleep 1
   if adb_serial_online "$connect_addr"; then
     persist_ip "$connect_addr"
@@ -111,16 +147,45 @@ TXT
 }
 
 main() {
-  case "${1:-}" in
-    --from-usb) migrate_from_usb ;;
-    -h|--help)  sed -n '2,15p' "$_self" | sed 's/^# \{0,1\}//' ;;
-    *:*[0-9])   pair_manual "$1" "${2:-}" ;;
-    "")
-      local rc=0
-      adb_unique_usb_serial >/dev/null; rc=$?
+  local action="interactive" pair_addr="" code="" arg
+  while [ $# -gt 0 ]; do
+    arg="$1"
+    case "$arg" in
+      --from-usb) action="from-usb" ;;
+      --discover) action="discover" ;;
+      --device)
+        [ $# -ge 2 ] || die "--device exige um SERIAL."
+        DEVICE_SERIAL="$2"; shift
+        ;;
+      --device=*) DEVICE_SERIAL="${arg#*=}"; [ -n "$DEVICE_SERIAL" ] || die "--device exige um SERIAL." ;;
+      --port)
+        [ $# -ge 2 ] || die "--port exige uma PORTA."
+        ADB_TCP_PORT="$2"; shift
+        ;;
+      --port=*) ADB_TCP_PORT="${arg#*=}" ;;
+      -h|--help) action="help" ;;
+      *:*[0-9])
+        [ -z "$pair_addr" ] && pair_addr="$arg" || code="$arg"
+        action="pair"
+        ;;
+      [0-9][0-9][0-9][0-9][0-9][0-9]) die "Não passe o código na linha de comando; informe-o no prompt oculto." ;;
+      *) die "Argumento inválido: $arg" ;;
+    esac
+    shift
+  done
+  adx_valid_port "$ADB_TCP_PORT" || die "--port deve estar entre 1 e 65535."
+  case "$action" in
+    from-usb) migrate_from_usb ;;
+    discover) list_mdns_endpoints ;;
+    help) sed -n '2,16p' "$_self" | sed 's/^# \{0,1\}//' ;;
+    pair) pair_manual "$pair_addr" "$code" ;;
+    interactive)
+      local rc=0 selected=""
+      selected="$(adb_choose_serial USB)"; rc=$?
       if [ "$rc" = 2 ]; then
-        die "Há vários dispositivos USB. Defina DEVICE_SERIAL para escolher explicitamente."
+        die "Seleção USB cancelada. Use --device SERIAL para escolher explicitamente."
       elif [ "$rc" = 0 ]; then
+        DEVICE_SERIAL="$selected"
         log_info "Dispositivo USB detectado."
         printf 'Migrar do USB para Wi-Fi automaticamente? [S/n] ' >&2; read -r ans
         case "${ans:-S}" in [Nn]*) pair_manual ;; *) migrate_from_usb ;; esac
@@ -128,7 +193,6 @@ main() {
         pair_manual
       fi
       ;;
-    *) die "Argumento inválido: $1 (use IP:PORTA ou --from-usb)" ;;
   esac
 }
 main "$@"

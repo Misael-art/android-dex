@@ -13,8 +13,8 @@ em qualquer versão.
 ## O que "robusto e resiliente" significa aqui
 
 O núcleo é um **supervisor** (`android-dex`) que não apenas lança o scrcpy, mas
-cuida da sessão de ponta a ponta: seleciona um único aparelho (e bloqueia quando
-há ambiguidade), fixa sua identidade pela sessão, aplica os ajustes de modo
+cuida da sessão de ponta a ponta: seleciona um único aparelho (com escolha
+interativa quando há ambiguidade), fixa sua identidade pela sessão, aplica os ajustes de modo
 desktop, sobe a sessão e, se a conexão
 cair, reconecta sozinho com *backoff* exponencial e *jitter*. Se o transporte
 Wi-Fi morrer, ele derruba e refaz o `adb connect`. Um lock impede supervisores
@@ -65,16 +65,21 @@ Por Wi-Fi, primeiro emparelhe (só uma vez) e depois conecte:
 ```bash
 android-dex-connect      # migra do USB p/ Wi-Fi, ou emparelha por código
 android-dex --wifi       # usa o IP que ficou salvo
+android-dex-connect --discover # mostra portas de conexão anunciadas por mDNS
 ```
 
 Outros comandos:
 
 ```bash
 android-dex --mirror     # espelha a tela real em vez do modo desktop
+android-dex --list       # lista serial, estado, transporte e modelo
+android-dex --device PHONE-A # escolhe o serial sem ambiguidade
 android-dex --once       # roda uma sessão sem ficar reconectando
 android-dex --status     # mostra estado, dispositivos e sessão ativa
 android-dex --stop       # encerra a sessão atual
-android-dex 192.168.1.50 # conecta direto num IP (porta 5555 assumida)
+android-dex --restore-tweaks --device PHONE-A # restaura ajustes globais salvos
+android-dex 192.168.1.50 # usa ADB_TCP_PORT (5555 por padrão)
+android-dex-connect --from-usb --port 43210 # escolhe outra porta adb tcpip
 ```
 
 O lançador "Android DEX" também aparece no menu de aplicativos; o clique-direito
@@ -91,12 +96,14 @@ Tudo mora em `~/.config/android-dex/config.env` (criado a partir do
 | `CONNECTION` | `auto` | `auto`, `usb` ou `wifi` |
 | `DEVICE_IP` | vazio | IP:porta do aparelho (preenchido pelo `-connect`) |
 | `DEVICE_SERIAL` | vazio | fixa um serial quando há vários aparelhos |
+| `ADB_TCP_PORT` | `5555` | porta do fluxo legado `adb tcpip` |
 | `DISPLAY_RES` | `1920x1080` | resolução do desktop virtual |
 | `DISPLAY_DPI` | `160` | densidade (menor = mais área útil) |
 | `MAX_FPS` / `VIDEO_BITRATE` | `60` / `8M` | qualidade do vídeo |
 | `AUDIO` | `1` | encaminha o áudio do aparelho (scrcpy 2.0+) |
 | `STAY_AWAKE` | `1` | impede o aparelho de dormir |
 | `ENABLE_FREEFORM_TWEAKS` | `1` | liga janelas livres (desktop) via adb |
+| `RESTORE_TWEAKS_ON_EXIT` | `0` | restaura o snapshot exato ao encerrar |
 | `VD_SYSTEM_DECORATIONS` | `1` | `0` = `--no-vd-system-decorations` (UI quebrada) |
 | `START_APP` | vazio | abre um app/launcher no display virtual vazio |
 | `RECONNECT` | `1` | supervisor reconecta em quedas |
@@ -104,12 +111,20 @@ Tudo mora em `~/.config/android-dex/config.env` (criado a partir do
 | `HEALTHY_SESSION_SECONDS` | `15` | estabilidade mínima antes de zerar o backoff |
 | `AUTO_DEX_MIN_SDK` | `35` | SDK mínimo para tentar DeX automaticamente |
 | `EXTRA_ARGS` | vazio | argumentos crus repassados ao scrcpy |
+| `ADX_DEBUG` | `0` | registra falhas não fatais normalmente silenciosas |
+
+Antes de alterar os três ajustes globais do modo desktop, o runtime salva os
+valores anteriores (inclusive a ausência de um valor) em
+`~/.local/state/android-dex/tweaks/`. Se a restauração automática estiver
+desligada, o log mostra o comando `--restore-tweaks`; o snapshot só é removido
+depois que todos os valores forem restaurados com sucesso. Em modo `mirror`,
+esses ajustes não são aplicados.
 
 ## Compatibilidade do modo DeX
 
 O padrão `MODE="auto"` lê fabricante, SDK e capacidades de display secundário.
 Quando a capacidade não é confirmada, usa `mirror`; se um display virtual cair
-rapidamente, tenta `mirror` uma vez. Perfis instalados para Samsung, Google,
+rapidamente, restaura os tweaks aplicados e tenta `mirror` uma vez. Perfis instalados para Samsung, Google,
 Xiaomi, Motorola e OnePlus/OPPO/Realme ajustam freeform, decorações e escolhem um
 launcher somente quando o pacote realmente existe. As escolhas explícitas do
 usuário continuam tendo prioridade. Use `--dex` para forçar um teste ou
@@ -137,12 +152,17 @@ do processo inteiro.
 Veja o estado com `android-dex --status` e os logs em
 `~/.local/state/android-dex/android-dex.log`.
 
+Para investigar uma falha normalmente não fatal, rode uma sessão com
+`ADX_DEBUG=1 android-dex --once`. O log mostrará o comando e o código de saída,
+sem transformar a falha em queda do supervisor.
+
 Problemas comuns: se `adb devices` mostra `unauthorized`, confirme o diálogo de
 autorização no aparelho; se mostra vazio no USB, o problema costuma ser
 permissão — relogue após a instalação (grupo udev) ou verifique o cabo. No Wi-Fi,
 lembre que o código e a porta de **emparelhamento** mudam a cada vez que a tela de
 Depuração sem fio é aberta, e a porta de **conexão** é diferente da de
-emparelhamento (o `android-dex-connect` pergunta as duas).
+emparelhamento. O `android-dex-connect` tenta descobri-la por mDNS e só pergunta
+quando a descoberta não é única ou não está disponível.
 
 ## Desinstalação
 

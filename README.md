@@ -97,6 +97,7 @@ android-dex                  # auto-detecta e sobe a sessão
 
 android-dex-connect          # migra p/ Wi-Fi (emparelha e salva o IP)
 android-dex --wifi           # conecta pelo IP salvo
+android-dex --list           # lista aparelhos; --device escolhe um deles
 android-dex --status         # estado, dispositivos e sessão ativa
 ```
 </details>

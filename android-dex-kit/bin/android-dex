@@ -9,6 +9,9 @@
 #   android-dex 192.168.1.50    # conecta neste IP (porta 5555 assumida)
 #   android-dex 192.168.1.50:37000
 #   android-dex --mirror        # espelha a tela real em vez do modo DeX
+#   android-dex --list          # lista aparelhos e seus estados
+#   android-dex --device SERIAL # escolhe explicitamente um aparelho
+#   android-dex --restore-tweaks # restaura os ajustes globais salvos
 #   android-dex --once          # não fica reconectando (roda uma sessão)
 #   android-dex --status        # mostra estado atual e sai
 #   android-dex --stop          # encerra sessões em andamento
@@ -46,6 +49,7 @@ AUTO_DEX_FALLBACK_USED=0
 SESSION_TOKEN=""
 SESSION_LOCK_HELD=0
 SUPERVISOR_STATE_FILE="$ADX_STATE_DIR/supervisor.state"
+ACTION="run"
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -61,12 +65,19 @@ parse_args() {
       --dex)     MODE="dex" ;;
       --once)    ONCE=1; RECONNECT=0 ;;
       --no-audio) AUDIO=0 ;;
-      --status)  cmd_status; exit 0 ;;
-      --stop)    cmd_stop;   exit 0 ;;
+      --list)    ACTION="list" ;;
+      --status)  ACTION="status" ;;
+      --stop)    ACTION="stop" ;;
+      --restore-tweaks) ACTION="restore-tweaks" ;;
+      --device)
+        [ $# -ge 2 ] || die "--device exige um SERIAL. Use --list para consultar."
+        DEVICE_SERIAL="$2"; shift
+        ;;
+      --device=*) DEVICE_SERIAL="${1#*=}"; [ -n "$DEVICE_SERIAL" ] || die "--device exige um SERIAL." ;;
       -h|--help) usage; exit 0 ;;
       *:*[0-9])  DEVICE_IP="$1"; CONNECTION="wifi" ;;
-      *.*.*.*)   DEVICE_IP="$1:5555"; CONNECTION="wifi" ;;
-      *) log_warn "Argumento ignorado: $1" ;;
+      *.*.*.*)   DEVICE_IP="$1:$ADB_TCP_PORT"; CONNECTION="wifi" ;;
+      *) die "Argumento inválido: $1 (use --help para consultar as opções)." ;;
     esac
     shift
   done
@@ -163,9 +174,10 @@ select_runtime_mode() {
 wifi_try_connect() {
   local ip="$1"
   [ -n "$ip" ] || return 1
+  adx_valid_endpoint "$ip" || { log_error "DEVICE_IP inválido: '$ip' (esperado HOST:PORTA)."; return 1; }
   if adb_serial_online "$ip"; then return 0; fi
   log_info "Conectando por Wi-Fi em $ip ..."
-  adb connect "$ip" >/dev/null 2>&1 || true
+  adx_try_quiet adb connect "$ip" || true
   sleep 1
   adb_serial_online "$ip"
 }
@@ -192,7 +204,7 @@ resolve_device() {
   local s="" rc=0
   case "$CONNECTION" in
     usb)
-      s="$(adb_unique_usb_serial)"; rc=$?
+      s="$(adb_choose_serial USB)"; rc=$?
       [ "$rc" = 0 ] && { echo "$s"; return 0; }
       ;;
     wifi)
@@ -200,19 +212,19 @@ resolve_device() {
         wifi_try_connect "$DEVICE_IP" && { echo "$DEVICE_IP"; return 0; }
         return 1
       fi
-      s="$(adb_unique_tcp_serial)"; rc=$?
+      s="$(adb_choose_serial TCP/IP)"; rc=$?
       [ "$rc" = 0 ] && { echo "$s"; return 0; }
       ;;
     auto|*)
       # 1) USB conectado
-      s="$(adb_unique_usb_serial)"; rc=$?
+      s="$(adb_choose_serial USB)"; rc=$?
       [ "$rc" = 0 ] && { echo "$s"; return 0; }
       [ "$rc" = 2 ] && return 1
       # 2) IP salvo
       if [ -n "$DEVICE_IP" ] && wifi_try_connect "$DEVICE_IP"; then echo "$DEVICE_IP"; return 0; fi
       # 3) sem IP salvo, aceita somente um TCP inequivocamente identificável
       if [ -z "$DEVICE_IP" ]; then
-        s="$(adb_unique_tcp_serial)"; rc=$?
+        s="$(adb_choose_serial TCP/IP)"; rc=$?
         [ "$rc" = 0 ] && { echo "$s"; return 0; }
       fi
       ;;
@@ -223,24 +235,115 @@ resolve_device() {
 # ---------------------------------------------------------------------------
 # Tweaks de "desktop mode" (janelas livres) — reversíveis
 # ---------------------------------------------------------------------------
+tweaks_snapshot_path() {
+  local s="$1" safe checksum
+  safe="$(printf '%s' "$s" | tr -c 'A-Za-z0-9._-' '_')"
+  checksum="$(printf '%s' "$s" | cksum | awk '{print $1}')"
+  printf '%s/tweaks/%s-%s.state\n' "$ADX_STATE_DIR" "${safe:0:48}" "$checksum"
+}
+
+snapshot_desktop_tweaks() {
+  local s="$1" file tmp key value encoded
+  local -a keys=(
+    enable_freeform_support
+    force_desktop_mode_on_external_displays
+    enable_non_resizable_multi_window
+  )
+  have base64 || { log_error "base64 não encontrado; não aplicarei tweaks sem conseguir salvar o estado original."; return 1; }
+  file="$(tweaks_snapshot_path "$s")"
+  [ -f "$file" ] && return 0
+  mkdir -p "$(dirname "$file")" || return 1
+  chmod 700 "$(dirname "$file")" 2>/dev/null || true
+  tmp="$file.$$.tmp"
+  ( umask 077; printf 'android-dex-tweaks-v1\n' > "$tmp" ) || return 1
+  for key in "${keys[@]}"; do
+    if ! value="$(adb -s "$s" shell settings get global "$key" 2>/dev/null | tr -d '\r' | head -n1)"; then
+      rm -f "$tmp" 2>/dev/null || true
+      log_error "Não consegui ler o ajuste global '$key'; nenhum tweak será aplicado."
+      return 1
+    fi
+    if [ "$value" = null ]; then
+      printf '%s\tunset\t-\n' "$key" >> "$tmp" || return 1
+    else
+      encoded="$(printf '%s' "$value" | base64 | tr -d '\n')"
+      printf '%s\tset\t%s\n' "$key" "$encoded" >> "$tmp" || return 1
+    fi
+  done
+  mv -f "$tmp" "$file" || return 1
+  log_warn "Os ajustes desktop persistem no aparelho. O estado anterior foi salvo; use 'android-dex --device $s --restore-tweaks' para restaurá-lo."
+}
+
+validate_tweaks_snapshot() {
+  local file="$1" header key state encoded extra count=0 seen_freeform=0 seen_desktop=0 seen_nonresizable=0
+  IFS= read -r header < "$file" || return 1
+  [ "$header" = android-dex-tweaks-v1 ] || return 1
+  while IFS=$'\t' read -r key state encoded extra; do
+    [ -z "${extra:-}" ] || return 1
+    case "$key" in
+      enable_freeform_support) [ "$seen_freeform" = 0 ] || return 1; seen_freeform=1 ;;
+      force_desktop_mode_on_external_displays) [ "$seen_desktop" = 0 ] || return 1; seen_desktop=1 ;;
+      enable_non_resizable_multi_window) [ "$seen_nonresizable" = 0 ] || return 1; seen_nonresizable=1 ;;
+      *) return 1 ;;
+    esac
+    case "$state" in
+      unset) [ "$encoded" = - ] || return 1 ;;
+      set) printf '%s' "$encoded" | base64 -d >/dev/null 2>&1 || return 1 ;;
+      *) return 1 ;;
+    esac
+    count=$((count + 1))
+  done < <(tail -n +2 "$file")
+  [ "$count" -eq 3 ] && [ "$seen_freeform" = 1 ] && [ "$seen_desktop" = 1 ] && [ "$seen_nonresizable" = 1 ]
+}
+
 apply_desktop_tweaks() {
-  local s="$1"
+  local s="$1" key failures=0
+  local -a keys=(
+    enable_freeform_support
+    force_desktop_mode_on_external_displays
+    enable_non_resizable_multi_window
+  )
+  [ "$MODE" = dex ] || return 0
   [ "$ENABLE_FREEFORM_TWEAKS" = "1" ] || return 0
+  snapshot_desktop_tweaks "$s" || return 1
   log_info "Aplicando ajustes de modo desktop (freeform)..."
-  adb -s "$s" shell settings put global enable_freeform_support 1 >/dev/null 2>&1 || true
-  adb -s "$s" shell settings put global force_desktop_mode_on_external_displays 1 >/dev/null 2>&1 || true
-  adb -s "$s" shell settings put global enable_non_resizable_multi_window 1 >/dev/null 2>&1 || true
+  for key in "${keys[@]}"; do
+    adx_try_quiet adb -s "$s" shell settings put global "$key" 1 || failures=$((failures + 1))
+  done
   TWEAKS_APPLIED=1
+  [ "$failures" -eq 0 ] || log_warn "$failures ajuste(s) desktop falharam; o snapshot foi mantido para restauração."
+  [ "$failures" -eq 0 ]
 }
 
 restore_desktop_tweaks() {
-  [ "$TWEAKS_APPLIED" = "1" ] || return 0
-  [ "$RESTORE_TWEAKS_ON_EXIT" = "1" ] || return 0
-  local s="$1"
-  log_info "Revertendo ajustes de modo desktop..."
-  adb -s "$s" shell settings delete global enable_freeform_support >/dev/null 2>&1 || true
-  adb -s "$s" shell settings delete global force_desktop_mode_on_external_displays >/dev/null 2>&1 || true
-  adb -s "$s" shell settings delete global enable_non_resizable_multi_window >/dev/null 2>&1 || true
+  local s="$1" force="${2:-0}" file key state encoded extra value failures=0
+  if [ "$force" != 1 ]; then
+    [ "$TWEAKS_APPLIED" = 1 ] || return 0
+    [ "$RESTORE_TWEAKS_ON_EXIT" = 1 ] || return 0
+  fi
+  file="$(tweaks_snapshot_path "$s")"
+  if [ ! -f "$file" ]; then
+    [ "$force" = 1 ] && log_warn "Não há snapshot de tweaks salvo para '$s'."
+    return 1
+  fi
+  validate_tweaks_snapshot "$file" || { log_error "Snapshot de tweaks inválido; não alterei o aparelho: $file"; return 1; }
+  log_info "Restaurando exatamente os ajustes globais anteriores..."
+  while IFS=$'\t' read -r key state encoded extra; do
+    case "$state" in
+      unset) adx_try_quiet adb -s "$s" shell settings delete global "$key" || failures=$((failures + 1)) ;;
+      set)
+        value="$(printf '%s' "$encoded" | base64 -d)"
+        adx_try_quiet adb -s "$s" shell settings put global "$key" "$value" || failures=$((failures + 1))
+        ;;
+    esac
+  done < <(tail -n +2 "$file")
+  if [ "$failures" -eq 0 ]; then
+    rm -f "$file" || return 1
+    TWEAKS_APPLIED=0
+    log_ok "Ajustes globais restaurados para o estado anterior."
+    return 0
+  fi
+  log_error "$failures ajuste(s) não puderam ser restaurados; mantive o snapshot em $file."
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -323,6 +426,9 @@ supervisor() {
       AUTO_DEX_FALLBACK_USED=1
       MODE="mirror"
       log_warn "Display virtual falhou rapidamente; tentando mirror uma vez antes de desistir."
+      if [ "$TWEAKS_APPLIED" = 1 ]; then
+        restore_desktop_tweaks "$TARGET_SERIAL" 1 || log_warn "Não foi possível restaurar todos os tweaks antes do fallback para mirror."
+      fi
       continue
     fi
 
@@ -343,7 +449,7 @@ supervisor() {
     local d; d="$(adx_backoff "$attempt" "$BACKOFF_BASE" "$BACKOFF_CAP")"
     log_warn "Sessão caiu após ${SESSION_DURATION}s (rc=$rc). Tentando recuperar em ${d}s..."
     # se era Wi-Fi, forçar reconexão do transporte
-    if adx_is_tcp_serial "$TARGET_SERIAL"; then adb disconnect "$TARGET_SERIAL" >/dev/null 2>&1 || true; fi
+    if adx_is_tcp_serial "$TARGET_SERIAL"; then adx_try_quiet adb disconnect "$TARGET_SERIAL" || true; fi
     sleep_interruptible "$d"; attempt=$((attempt+1))
   done
 }
@@ -359,12 +465,32 @@ cmd_status() {
   printf '  conexão     : %s\n' "$CONNECTION"
   printf '  DEVICE_IP   : %s\n' "${DEVICE_IP:-<vazio>}"
   printf '  dispositivos:\n'
-  adb devices -l 2>/dev/null | sed '1d;/^$/d' | sed 's/^/    /'
+  adb_list_devices | sed 's/^/    /'
   if read_supervisor_state && supervisor_state_is_live; then
     printf '  supervisor  : %sativo (pid %s)%s\n' "$C_GREEN" "$STATE_PID" "$C_RESET"
   else
     printf '  supervisor  : inativo\n'
   fi
+}
+
+cmd_list() {
+  adb_ensure_server
+  adb_list_devices
+  printf '\nUse: android-dex --device SERIAL [--usb|--wifi]\n'
+}
+
+cmd_restore_tweaks() {
+  local s
+  adb_ensure_server
+  acquire_session_lock
+  trap release_session_lock EXIT
+  if ! s="$(resolve_device)"; then
+    die "Nenhum aparelho selecionado para restaurar. Use --list e --device SERIAL."
+  fi
+  TARGET_SERIAL="$s"; PINNED_SERIAL="$s"
+  restore_desktop_tweaks "$s" 1 || die "Não foi possível concluir a restauração dos tweaks."
+  release_session_lock
+  trap - EXIT
 }
 
 cmd_stop() {
@@ -487,6 +613,12 @@ handle_signal() {
 # ---------------------------------------------------------------------------
 main() {
   parse_args "$@"
+  case "$ACTION" in
+    list) cmd_list; return ;;
+    status) cmd_status; return ;;
+    stop) cmd_stop; return ;;
+    restore-tweaks) cmd_restore_tweaks; return ;;
+  esac
   acquire_session_lock
   trap handle_signal INT TERM
   trap cleanup EXIT

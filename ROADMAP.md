@@ -55,41 +55,49 @@ corretas sem edição manual de config.
 tem Desktop Mode utilizável.
 **Implementado.** `MODE=auto` checa scrcpy, SDK, display secundário, ajustes
 freeform e perfil OEM; dúvida resulta em mirror. Falha rápida do display virtual
-aciona uma tentativa única em mirror. Falta validar a heurística em hardware.
+restaura os tweaks aplicados e aciona uma tentativa única em mirror. Falta
+validar a heurística em hardware.
 **Aceite.** Aparelho sem Desktop Mode nunca mostra tela preta; loga o motivo do
 downgrade para mirror.
 
-### A5. Seletor de múltiplos aparelhos (`--list`) — `WIP` · impacto: MÉDIO
+### A5. Seletor de múltiplos aparelhos (`--list`) — `DONE` · impacto: MÉDIO
 **Problema.** `resolve_device` pega "o primeiro" USB/TCP; com dois aparelhos sem
 `DEVICE_SERIAL` o comportamento é imprevisível.
-**Implementado agora.** O runtime recusa seleção ambígua, respeita
-`DEVICE_SERIAL` estritamente e fixa o serial após a primeira sessão. Falta a UX:
-`android-dex --list` deve listar `adb devices -l` numerado com
-modelo/serial; seleção interativa quando há mais de um e nenhum `DEVICE_SERIAL`.
+**Implementado.** O runtime recusa seleção ambígua em automações, respeita
+`DEVICE_SERIAL`/`--device` estritamente, fixa o serial após a primeira sessão e
+oferece escolha numerada em terminais interativos. `--list` mostra serial,
+estado, transporte e modelo, incluindo aparelhos offline/não autorizados.
 **Aceite.** Com dois aparelhos plugados, o usuário escolhe qual usar.
 
-### A6. `--from-usb` com porta de depuração sem fio dinâmica — `TODO` · impacto: MÉDIO
+### A6. `--from-usb` com porta de depuração sem fio dinâmica — `WIP` · impacto: MÉDIO
 **Problema.** A migração USB→TCP assume porta `5555` (`android-dex-connect:48`).
 Em Android 11+ com depuração sem fio "pura" a porta é aleatória.
-**Solução.** Após `adb tcpip`, descobrir a porta via `adb shell` (ou usar
-`adb pair`/mDNS quando disponível) em vez de fixar 5555; manter 5555 como padrão.
+**Implementado.** O fluxo legado `adb tcpip` aceita `--port`/`ADB_TCP_PORT` e
+valida o intervalo. No Android 11+, o pareamento descobre automaticamente o
+endpoint aleatório `_adb-tls-connect._tcp` por mDNS, com `--discover` para
+diagnóstico e fallback interativo. O código é lido sem eco e enviado ao `adb`
+por stdin, nunca aceito como argumento de linha de comando. Falta validar a
+descoberta mDNS na matriz de hardware.
 **Aceite.** `--from-usb` conecta em aparelho cuja porta de depuração não é 5555.
 
-### A7. Tornar visível a persistência dos tweaks globais — `TODO` · impacto: BAIXO
+### A7. Tornar visível a persistência dos tweaks globais — `DONE` · impacto: BAIXO
 **Problema.** `RESTORE_TWEAKS_ON_EXIT=0` por padrão deixa `enable_freeform_support`
 e afins alterados em `settings global` do aparelho — modificação persistente
 pouco visível.
-**Solução.** Log explícito na 1ª aplicação ("estes ajustes ficam no aparelho até
-`--restore-tweaks`") e um subcomando `android-dex --restore-tweaks`.
+**Implementado.** Antes da primeira alteração, salva atomicamente os três
+valores anteriores (inclusive `unset`), anuncia a persistência e oferece
+`--restore-tweaks`. Só apaga o snapshot após restauração integral; mirror não
+recebe tweaks de desktop.
 **Aceite.** Usuário consegue reverter tudo com um comando; a persistência é
 anunciada.
 
-### A8. Rigor de shell / erros silenciosos — `TODO` · impacto: BAIXO
+### A8. Rigor de shell / erros silenciosos — `DONE` · impacto: BAIXO
 **Observação.** `set -uo pipefail` sem `-e` e muitos `|| true` são escolha
 consciente (o supervisor não pode morrer por um comando bobo), mas erros passam
 sem registro.
-**Solução.** Wrapper `try()` que loga o comando e o `rc` em nível DEBUG quando
-`ADX_DEBUG=1`, preservando o comportamento não-fatal.
+**Implementado.** Wrappers `adx_try`/`adx_try_quiet` registram comando escapado
+e `rc` em DEBUG quando `ADX_DEBUG=1`, preservando o comportamento não fatal e
+evitando seu uso no fluxo que recebe o código secreto de pareamento.
 **Aceite.** Com `ADX_DEBUG=1`, falhas de comandos "silenciosos" aparecem no log.
 
 ### A9. Suíte de smoke tests — `DONE` · impacto: MÉDIO

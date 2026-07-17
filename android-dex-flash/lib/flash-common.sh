@@ -88,7 +88,7 @@ verify_firmware_descriptor() {
   artifact="$(firmware_manifest_get "$manifest" artifact)"
   expected_sha="$(firmware_manifest_get "$manifest" sha256)"
   [ "$format" = "android-dex-firmware-v1" ] || die "Formato de manifesto incompatível: '${format:-vazio}'"
-  [ -n "$oem" ] && [ -n "$artifact" ] && [ -n "$expected_sha" ] || die "Manifesto incompleto (oem/artifact/sha256 são obrigatórios)."
+  if [ -z "$oem" ] || [ -z "$artifact" ] || [ -z "$expected_sha" ]; then die "Manifesto incompleto (oem/artifact/sha256 são obrigatórios)."; fi
   [ -n "$model" ] || [ -n "$device" ] || die "Manifesto precisa vincular model ou device."
   [[ "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]] || die "SHA-256 inválido no manifesto."
   case "$artifact" in */*|..|.|'') die "artifact precisa ser um nome de arquivo local, sem diretórios.";; esac

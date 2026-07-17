@@ -480,8 +480,8 @@ cleanup() {
 
 handle_signal() {
   SHOULD_RUN=0
-  [ -n "$SCRCPY_PID" ] && kill "$SCRCPY_PID" 2>/dev/null || true
-  [ -n "$SLEEP_PID" ] && kill "$SLEEP_PID" 2>/dev/null || true
+  if [ -n "$SCRCPY_PID" ]; then kill "$SCRCPY_PID" 2>/dev/null || true; fi
+  if [ -n "$SLEEP_PID" ]; then kill "$SLEEP_PID" 2>/dev/null || true; fi
 }
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ cleanup_tests() {
   for p in "$TMP_ROOT"/case-*/supervisor.pid; do
     [ -f "$p" ] || continue
     p="$(sed -n '1p' "$p")"
-    [[ "$p" =~ ^[0-9]+$ ]] && kill "$p" 2>/dev/null || true
+    if [[ "$p" =~ ^[0-9]+$ ]]; then kill "$p" 2>/dev/null || true; fi
   done
   rm -rf "$TMP_ROOT"
 }

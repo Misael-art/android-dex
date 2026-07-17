@@ -83,7 +83,7 @@ TXT
   if [ -z "$code" ]; then
     printf 'Código de 6 dígitos: ' >&2; read -r code
   fi
-  [ -n "$pair_addr" ] && [ -n "$code" ] || die "IP:porta e código são obrigatórios."
+  if [ -z "$pair_addr" ] || [ -z "$code" ]; then die "IP:porta e código são obrigatórios."; fi
 
   log_step "Emparelhando com $pair_addr"
   if adb pair "$pair_addr" "$code"; then

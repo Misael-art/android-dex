@@ -189,8 +189,8 @@ install_files() {
 
   install -m 0644 "$SRC_DIR/desktop/android-dex.desktop" "$appsdir/android-dex.desktop"
   install -m 0644 "$SRC_DIR/icons/android-dex.svg"       "$icondir/android-dex.svg"
-  have update-desktop-database && update-desktop-database "$appsdir" >/dev/null 2>&1 || true
-  have gtk-update-icon-cache && gtk-update-icon-cache "$XDG_DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
+  if have update-desktop-database; then update-desktop-database "$appsdir" >/dev/null 2>&1 || true; fi
+  if have gtk-update-icon-cache; then gtk-update-icon-cache "$XDG_DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true; fi
   log_ok "Lançador e ícone registrados no menu de aplicativos."
 
   install -m 0644 "$SRC_DIR/systemd/android-dex.service" "$unitdir/android-dex.service"

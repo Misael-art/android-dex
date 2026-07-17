@@ -28,15 +28,15 @@ log_step "Removendo Android-DEX Kit"
 if have systemctl; then
   systemctl --user disable --now android-dex.service 2>/dev/null || true
 fi
-[ -x "$HOME/.local/bin/android-dex" ] && "$HOME/.local/bin/android-dex" --stop 2>/dev/null || true
+if [ -x "$HOME/.local/bin/android-dex" ]; then "$HOME/.local/bin/android-dex" --stop 2>/dev/null || true; fi
 
 rm -f "$HOME/.local/bin/android-dex" "$HOME/.local/bin/android-dex-connect"
 rm -f "$XDG_DATA_HOME/applications/android-dex.desktop"
 rm -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/android-dex.svg"
 rm -f "$XDG_CONFIG_HOME/systemd/user/android-dex.service"
 rm -rf "$ADX_DATA_DIR"
-have systemctl && systemctl --user daemon-reload 2>/dev/null || true
-have update-desktop-database && update-desktop-database "$XDG_DATA_HOME/applications" >/dev/null 2>&1 || true
+if have systemctl; then systemctl --user daemon-reload 2>/dev/null || true; fi
+if have update-desktop-database; then update-desktop-database "$XDG_DATA_HOME/applications" >/dev/null 2>&1 || true; fi
 log_ok "Binários, lançador, ícone e serviço removidos."
 
 if [ "$PURGE" = "1" ]; then
@@ -44,7 +44,7 @@ if [ "$PURGE" = "1" ]; then
   log_ok "Config e logs removidos."
   if [ -f /etc/udev/rules.d/51-android-dex.rules ]; then
     if have sudo; then
-      sudo rm -f /etc/udev/rules.d/51-android-dex.rules && sudo udevadm control --reload-rules 2>/dev/null || true
+      if sudo rm -f /etc/udev/rules.d/51-android-dex.rules; then sudo udevadm control --reload-rules 2>/dev/null || true; fi
       log_ok "Regra udev removida."
     else
       log_warn "Remova a regra udev manualmente: /etc/udev/rules.d/51-android-dex.rules"

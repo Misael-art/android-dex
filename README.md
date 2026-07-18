@@ -99,6 +99,7 @@ android-dex-connect          # migra p/ Wi-Fi (emparelha e salva o IP)
 android-dex --wifi           # conecta pelo IP salvo
 android-dex --list           # lista aparelhos; --device escolhe um deles
 android-dex --status         # estado, dispositivos e sessão ativa
+android-dex-doctor           # diagnóstico somente leitura + capacidades
 ```
 </details>
 
@@ -129,6 +130,9 @@ cd android-dex-flash
 
 android-dex-flash info       # marca/modelo/SO/bootloader + o que é possível e o que se perde
 android-dex-flash caps       # capacidades e riscos do seu modelo
+android-dex-flash check-rollback DIR # assinatura + anti-downgrade
+android-dex-flash backup-boot        # backup com manifesto e SHA-256
+android-dex-flash extract-payload payload.bin DIR
 
 # ações que gravam — dry-run por padrão:
 android-dex-flash unlock             # simula (mostra a sequência exata)

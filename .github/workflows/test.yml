@@ -18,3 +18,29 @@ jobs:
         run: make test
       - name: ShellCheck
         run: make lint
+
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Parse PowerShell 5.1-compatible scripts
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/powershell-syntax.ps1
+      - name: Smoke test device listing
+        shell: powershell
+        run: |
+          $mock = Join-Path $env:RUNNER_TEMP 'android-dex-mocks'
+          New-Item -ItemType Directory -Force -Path $mock | Out-Null
+          @'
+          @echo off
+          if "%1"=="devices" (
+            echo List of devices attached
+            echo PHONE-A device product:husky model:Pixel_8_Pro device:husky
+          )
+          exit /b 0
+          '@ | Set-Content -Path (Join-Path $mock 'adb.cmd') -Encoding ASCII
+          $env:PATH = "$mock;$env:PATH"
+          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'local'
+          $env:APPDATA = Join-Path $env:RUNNER_TEMP 'roaming'
+          $output = & powershell -NoProfile -ExecutionPolicy Bypass -File android-dex-kit/windows/android-dex.ps1 -Command list | Out-String
+          if ($LASTEXITCODE -ne 0 -or $output -notmatch 'PHONE-A' -or $output -notmatch 'Pixel_8_Pro') { throw "Windows smoke test failed: $output" }

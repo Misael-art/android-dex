@@ -19,7 +19,7 @@ Legenda de status: `TODO` · `WIP` (em progresso) · `DONE` · `BLOCKED`.
 > Correções e recursos que aumentam robustez, resiliência e **compatibilidade
 > entre marcas** sem sair do escopo "sem root".
 
-### A1. Regra udev confiável por *vendor ID* — `WIP` · impacto: ALTO
+### A1. Regra udev confiável por *vendor ID* — `BLOCKED` · impacto: ALTO
 **Problema.** `install.sh:139` casa `ATTR{bDeviceClass}=="ff"` no nível do
 *device*. Muitos aparelhos (Samsung, Xiaomi, etc.) expõem `bDeviceClass=0x00` no
 device e a interface ADB (`ff/42/01`) só como *interface*, ou aparecem como
@@ -28,8 +28,9 @@ Hoje o kit depende, na prática, do pacote `android-sdk-platform-tools-common`
 existir na distro.
 **Implementado.** Template próprio casa interfaces ADB/fastboot `ff/42/01` e
 `ff/42/03`, usa fallback restrito a classe vendor-specific + VIDs conhecidos e
-cobre Samsung Download/Odin. A renderização valida o nome do grupo. Falta a
-matriz de hardware real.
+cobre Samsung Download/Odin. A renderização valida o nome do grupo e
+`android-dex-doctor` produz o relatório somente leitura. O código está completo;
+o aceite final depende da matriz física Samsung/Xiaomi/Motorola/Pixel/OnePlus.
 **Aceite.** `adb devices` autoriza sem root em Samsung, Xiaomi, Motorola, Pixel
 e OnePlus após relogin; `udevadm test` mostra `uaccess` aplicado ao nó do device.
 
@@ -40,23 +41,26 @@ scrcpy) e para a unidade systemd quando ativa. O `pkill -f` amplo foi removido.
 **Aceite.** Teste com mocks confirma que o supervisor termina e não relança o
 scrcpy; uma segunda instância é recusada.
 
-### A3. Perfis por dispositivo (`profiles/`) — `WIP` · impacto: ALTO
+### A3. Perfis por dispositivo (`profiles/`) — `BLOCKED` · impacto: ALTO
 **Problema.** Ajustes de compatibilidade (`START_APP`, `VD_SYSTEM_DECORATIONS`,
 DPI/resolução) hoje são descobertos por tentativa e erro por marca.
 **Implementado.** Diretório `profiles/` com presets casados por
 `ro.product.manufacturer` / `ro.product.model` (lidos via `adb shell getprop`),
 aplicados antes dos argumentos do scrcpy; launchers só são usados se instalados
-e o config explícito prevalece. Faltam perfis finos por modelo.
+e o config explícito prevalece. Ajustes finos por modelo só podem ser promovidos
+com relatórios do `android-dex-doctor` e sessões reais, para não codificar
+suposições que causem tela vazia. Bloqueio: matriz física.
 **Aceite.** Em um não-Samsung, `android-dex` sobe já com launcher e decorações
 corretas sem edição manual de config.
 
-### A4. Detecção automática de capacidade (dex vs mirror) — `WIP` · impacto: ALTO
+### A4. Detecção automática de capacidade (dex vs mirror) — `BLOCKED` · impacto: ALTO
 **Problema.** O kit tenta `dex` e o usuário vê tela preta quando o aparelho não
 tem Desktop Mode utilizável.
 **Implementado.** `MODE=auto` checa scrcpy, SDK, display secundário, ajustes
 freeform e perfil OEM; dúvida resulta em mirror. Falha rápida do display virtual
 restaura os tweaks aplicados e aciona uma tentativa única em mirror. Falta
-validar a heurística em hardware.
+validar a heurística em hardware; o doctor agora coleta os mesmos sinais de
+forma reproduzível.
 **Aceite.** Aparelho sem Desktop Mode nunca mostra tela preta; loga o motivo do
 downgrade para mirror.
 
@@ -69,7 +73,7 @@ oferece escolha numerada em terminais interativos. `--list` mostra serial,
 estado, transporte e modelo, incluindo aparelhos offline/não autorizados.
 **Aceite.** Com dois aparelhos plugados, o usuário escolhe qual usar.
 
-### A6. `--from-usb` com porta de depuração sem fio dinâmica — `WIP` · impacto: MÉDIO
+### A6. `--from-usb` com porta de depuração sem fio dinâmica — `BLOCKED` · impacto: MÉDIO
 **Problema.** A migração USB→TCP assume porta `5555` (`android-dex-connect:48`).
 Em Android 11+ com depuração sem fio "pura" a porta é aleatória.
 **Implementado.** O fluxo legado `adb tcpip` aceita `--port`/`ADB_TCP_PORT` e
@@ -77,7 +81,8 @@ valida o intervalo. No Android 11+, o pareamento descobre automaticamente o
 endpoint aleatório `_adb-tls-connect._tcp` por mDNS, com `--discover` para
 diagnóstico e fallback interativo. O código é lido sem eco e enviado ao `adb`
 por stdin, nunca aceito como argumento de linha de comando. Falta validar a
-descoberta mDNS na matriz de hardware.
+descoberta mDNS na matriz de hardware. O fluxo está coberto por mocks com porta
+não-5555; resta somente o aceite físico em redes/aparelhos diferentes.
 **Aceite.** `--from-usb` conecta em aparelho cuja porta de depuração não é 5555.
 
 ### A7. Tornar visível a persistência dos tweaks globais — `DONE` · impacto: BAIXO
@@ -110,9 +115,12 @@ ADB/fastboot/scrcpy simulados. `make test`, `make lint` e GitHub Actions fecham
 o ciclo sem aparelho físico.
 **Aceite.** `make test` roda em CI sem aparelho físico.
 
-### A10. Paridade Windows (PowerShell) — `TODO` · impacto: BAIXO
-**Solução.** Porta do supervisor para PowerShell (mesmo laço + backoff), atalho
-`.lnk`, Tarefa Agendada no logon, `config.ps1`. Já esboçado no README do kit.
+### A10. Paridade Windows (PowerShell) — `DONE` · impacto: BAIXO
+**Implementado.** Porta PowerShell 5.1/7 com mutex de instância, seleção segura,
+modo automático, snapshot/restauração de tweaks, fallback DeX→mirror, estado,
+stop validado e backoff. Instalador cria `.lnk` e opcionalmente Tarefa Agendada;
+desinstalador preserva config por padrão. Parser e smoke test rodam em
+`windows-latest` na CI.
 **Aceite.** `android-dex.ps1` sobe sessão resiliente no Windows 10/11.
 
 ---
@@ -153,37 +161,56 @@ presentes no host, e imprime **o que é possível** naquele aparelho e **o que s
 perde**. Fundação segura para todo o resto.
 **Aceite.** `android-dex-flash info` roda sem nunca escrever no aparelho.
 
-### Fase 1 — Driver Pixel/AOSP (referência) — `WIP`
+### Fase 1 — Driver Pixel/AOSP (referência) — `DONE`
 O caminho mais limpo e documentado: `fastboot flashing unlock` → patch do
 `boot.img` com Magisk → `fastboot flash boot` → imagens de fábrica
 (`flash-all`/`fastboot update`). Serve de modelo para os demais.
-**Aceite.** Fluxo completo em `--dry-run` mostra a sequência exata; `--commit`
-exige confirmação digitada e checa bateria/modelo.
+**Implementado.** Dry-run mostra unlock, root em `boot`/`init_boot`, firmware e
+restore sem executar scripts do bundle. Unlock mantém commit com confirmação;
+recovery temporário Pixel exige hash, modelo e bootloader desbloqueado. Root,
+firmware e restore persistentes continuam fail-closed quando a identidade do
+artefato não for conclusiva.
 
-### Fase 2 — Driver Samsung (Heimdall) — `WIP`
+### Fase 2 — Driver Samsung (Heimdall) — `DONE`
 `heimdall` (open-source, cross-platform) + toggle "OEM unlock". **Aviso central:
 o desbloqueio queima o Knox e-fuse permanentemente** (Samsung Pay/Pass/Health/
 Pasta Segura morrem). Firmware via fontes oficiais (samloader/Frija).
-**Aceite.** Recusa de continuar sem o usuário digitar o reconhecimento do Knox.
+**Implementado.** Recusa até no dry-run sem o usuário digitar exatamente
+`KNOX PERMANENTE`; AP/BL/CP/CSC permanecem guiados porque PIT/layout variam.
 
-### Fase 3 — Xiaomi / Motorola / OnePlus — `WIP`
+### Fase 3 — Xiaomi / Motorola / OnePlus — `DONE`
 Cada um com sua peculiaridade de unlock: Xiaomi Mi Unlock (proprietário, espera
 oficial de dias, só Windows p/ a etapa de unlock — a ferramenta orienta, não
 burla); Motorola (código de unlock do site oficial); OnePlus/Sony (fastboot).
-**Aceite.** `caps` explica corretamente, por marca, o que a ferramenta faz e o
-que exige passo manual/oficial.
+**Implementado.** `caps` explica etapas oficiais e limites por marca. OPPO/Realme
+e Sony agora têm drivers próprios e nunca são tratados como OnePlus. Xiaomi não
+burla espera/conta; Motorola usa o código do portal oficial.
 
-### Fase 4 — Backlog do flash — `TODO`
-- Recovery customizada (TWRP/OrangeFox) onde aplicável.
-- `payload-dumper` para extrair partições de OTAs A/B.
-- Verificação de anti-rollback (recusar downgrade que possa brickar).
-- Backup guiado (`fastboot`/adb) antes de qualquer gravação.
-- Restauração pós-erro (voltar `boot.img` de fábrica).
+### Fase 4 — Backlog do flash — `DONE`
+- Recovery customizada: boot temporário Pixel (`fastboot boot`), sem persistir,
+  com SHA-256/modelo/unlock obrigatórios em commit.
+- `extract-payload`: usa `payload-dumper-go` já instalado, diretório vazio e
+  gera hashes das imagens extraídas.
+- Anti-rollback: manifesto assinado v2 compara patch e índice quando expostos e
+  recusa downgrade; resultado inconclusivo mantém commit bloqueado.
+- `backup-boot`: tenta `fastboot fetch` ou leitura root ADB e salva manifesto,
+  fingerprint, tamanho e SHA-256; aceita imagem oficial como cópia conhecida.
+- Restauração: roteiro para `boot`/`init_boot` com hash; gravação automática
+  continua fail-closed sem vínculo forte do artefato.
 
 ---
 
-## Ordem sugerida de execução
-1. **A1 + A2** (correções de compatibilidade/robustez de maior retorno no kit).
-2. **A3 + A4** (perfis + detecção de capacidade — a maior melhoria de UX/marca).
-3. Endurecer as Fases 1–3 do `android-dex-flash` a partir do esqueleto atual.
-4. A5–A10 conforme prioridade.
+## Bloqueios externos restantes
+
+Não há item de software em `TODO`/`WIP`. Os quatro itens `BLOCKED` exigem
+aparelhos físicos e não podem ser aprovados honestamente por mocks:
+
+| Validação | Recurso externo necessário |
+| --- | --- |
+| udev ADB/fastboot/Download | aparelhos Samsung, Xiaomi, Motorola, Pixel e OnePlus |
+| perfis e fallback DeX | sessão visual real por OEM/modelo |
+| mDNS/porta dinâmica | Android 11+ em redes Wi-Fi distintas |
+
+Execute `android-dex-doctor --device SERIAL` em cada aparelho e anexe o relatório
+ao resultado da sessão. Esses bloqueios não autorizam relaxar guard rails nem
+liberar firmware/root por suposição.

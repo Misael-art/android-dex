@@ -6,6 +6,7 @@ set -uo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEX_BIN="$ROOT_DIR/android-dex-kit/bin/android-dex"
 CONNECT_BIN="$ROOT_DIR/android-dex-kit/bin/android-dex-connect"
+DOCTOR_BIN="$ROOT_DIR/android-dex-kit/bin/android-dex-doctor"
 FLASH_BIN="$ROOT_DIR/android-dex-flash/bin/android-dex-flash"
 TMP_ROOT="$(mktemp -d)"
 MOCK_BIN="$TMP_ROOT/bin"
@@ -58,6 +59,11 @@ case "${1:-}" in
             ro.product.model) printf '%s\n' "${MOCK_MODEL:-Pixel8}" ;;
             ro.product.device) printf '%s\n' "${MOCK_DEVICE:-shiba}" ;;
             ro.build.version.sdk) printf '%s\n' "${MOCK_SDK:-35}" ;;
+            ro.build.version.security_patch) printf '%s\n' "${MOCK_SECURITY_PATCH:-2026-06-01}" ;;
+            ro.build.fingerprint) printf '%s\n' "${MOCK_FINGERPRINT:-google/shiba/test:16/ABC/1:user/release-keys}" ;;
+            ro.boot.rollback_index) printf '%s\n' "${MOCK_ROLLBACK_INDEX:-5}" ;;
+            ro.boot.slot_suffix) printf '%s\n' "${MOCK_SLOT_SUFFIX:-_a}" ;;
+            sys.oem_unlock_allowed) printf '%s\n' "${MOCK_OEM_UNLOCK_ALLOWED:-1}" ;;
           esac
           ;;
         cmd)
@@ -106,6 +112,10 @@ case "${1:-}" in
       exit 0
     fi
     case "${1:-}" in
+      exec-out)
+        printf '%s' "${MOCK_BOOT_CONTENT:-mock-boot-image}"
+        exit 0
+        ;;
       tcpip)
         printf '%s tcpip %s\n' "$serial" "${2:-}" >> "${MOCK_ADB_LOG:-/dev/null}"
         exit 0
@@ -127,14 +137,32 @@ case "${1:-}" in
     ;;
   getvar)
     if [ "${2:-}" = "unlocked" ]; then
-      printf 'unlocked: no\n' >&2
+      printf 'unlocked: %s\n' "${MOCK_FASTBOOT_UNLOCKED:-no}" >&2
+    elif [ "${2:-}" = "rollback-index" ] || [ "${2:-}" = "anti" ]; then
+      printf '%s: %s\n' "${2:-anti}" "${MOCK_ROLLBACK_INDEX:-5}" >&2
     else
       printf '%s: %s\n' "${2:-product}" "${MOCK_FASTBOOT_PRODUCT:-unknown}" >&2
     fi
     ;;
-  fetch) exit 1 ;;
+  fetch)
+    if [ -n "${MOCK_FASTBOOT_FETCH_SOURCE:-}" ]; then /bin/cp "$MOCK_FASTBOOT_FETCH_SOURCE" "${3:-}"; exit 0; fi
+    exit 1
+    ;;
   *) printf '%s\n' "$*" >> "${MOCK_FASTBOOT_LOG:-/dev/null}" ;;
 esac
+MOCK
+
+cat > "$MOCK_BIN/payload-dumper-go" <<'MOCK'
+#!/usr/bin/env bash
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift;; esac
+  shift
+done
+[ -n "$out" ] || exit 1
+mkdir -p "$out"
+printf 'extracted boot image\n' > "$out/boot.img"
+printf 'extracted init boot image\n' > "$out/init_boot.img"
 MOCK
 
 cat > "$MOCK_BIN/scrcpy" <<'MOCK'
@@ -153,7 +181,7 @@ case "${MOCK_SCRCPY_MODE:-quick}" in
 esac
 MOCK
 
-chmod +x "$MOCK_BIN/adb" "$MOCK_BIN/fastboot" "$MOCK_BIN/scrcpy"
+chmod +x "$MOCK_BIN/adb" "$MOCK_BIN/fastboot" "$MOCK_BIN/scrcpy" "$MOCK_BIN/payload-dumper-go"
 
 new_case() {
   local name="$1" dir
@@ -201,6 +229,16 @@ run_connect() {
     bash "$CONNECT_BIN" "$@"
 }
 
+run_doctor() {
+  local dir="$1"; shift
+  env HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" \
+    XDG_DATA_HOME="$dir/data" PATH="$MOCK_BIN:$PATH" MOCK_ADB_DEVICES="$dir/adb.devices" \
+    MOCK_ADB_MDNS="$dir/adb.mdns" MOCK_MANUFACTURER="${MOCK_MANUFACTURER:-Google}" \
+    MOCK_MODEL="${MOCK_MODEL:-Pixel8}" MOCK_DEVICE="${MOCK_DEVICE:-shiba}" MOCK_SDK="${MOCK_SDK:-35}" \
+    MOCK_SECONDARY_FEATURE="${MOCK_SECONDARY_FEATURE:-false}" \
+    bash "$DOCTOR_BIN" "$@"
+}
+
 run_flash() {
   local dir="$1" product="$2"; shift 2
   env HOME="$dir/home" XDG_CONFIG_HOME="$dir/config" XDG_STATE_HOME="$dir/state" \
@@ -209,6 +247,13 @@ run_flash() {
     MOCK_FASTBOOT_PRODUCT="$product" MOCK_FASTBOOT_LOG="$dir/fastboot.log" \
     MOCK_MANUFACTURER="${MOCK_MANUFACTURER:-Google}" MOCK_BRAND="${MOCK_BRAND:-google}" \
     MOCK_MODEL="${MOCK_MODEL:-Pixel8}" MOCK_DEVICE="${MOCK_DEVICE:-shiba}" MOCK_SDK="${MOCK_SDK:-35}" \
+    MOCK_SECURITY_PATCH="${MOCK_SECURITY_PATCH:-2026-06-01}" MOCK_ROLLBACK_INDEX="${MOCK_ROLLBACK_INDEX:-5}" \
+    MOCK_FINGERPRINT="${MOCK_FINGERPRINT:-google/shiba/test:16/ABC/1:user/release-keys}" \
+    MOCK_OEM_UNLOCK_ALLOWED="${MOCK_OEM_UNLOCK_ALLOWED:-1}" MOCK_SLOT_SUFFIX="${MOCK_SLOT_SUFFIX:-_a}" \
+    MOCK_BOOT_CONTENT="${MOCK_BOOT_CONTENT:-mock-boot-image}" \
+    MOCK_FASTBOOT_UNLOCKED="${MOCK_FASTBOOT_UNLOCKED:-no}" MOCK_FASTBOOT_FETCH_SOURCE="${MOCK_FASTBOOT_FETCH_SOURCE:-}" \
+    BOOT_IMG="${BOOT_IMG:-}" BOOT_SHA256="${BOOT_SHA256:-}" BOOT_PARTITION="${BOOT_PARTITION:-boot}" \
+    ROOT_PARTITION="${ROOT_PARTITION:-boot}" RECOVERY_IMG="${RECOVERY_IMG:-}" RECOVERY_SHA256="${RECOVERY_SHA256:-}" \
     bash "$FLASH_BIN" "$@"
 }
 
@@ -324,6 +369,105 @@ EOF
   printf 'adulterado\n' >> "$bundle/factory-image.zip"
   run_flash "$dir" unused verify-firmware "$bundle" >"$out" 2>&1 && return 1
   grep -q 'SHA-256 do artefato diverge' "$out"
+}
+
+test_signed_v2_plan_and_anti_rollback() {
+  local dir bundle keys artifact_sha image_sha plan_sha out
+  dir="$(new_case signed-v2)"; bundle="$dir/bundle"; keys="$dir/keys"; out="$dir/out"
+  mkdir -p "$bundle" "$keys"; printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
+  printf 'factory package\n' > "$bundle/factory-image.zip"
+  printf 'boot partition\n' > "$bundle/boot.img"
+  artifact_sha="$(sha256sum "$bundle/factory-image.zip" | awk '{print $1}')"
+  image_sha="$(sha256sum "$bundle/boot.img" | awk '{print $1}')"
+  printf 'update\tall\tfactory-image.zip\t%s\nflash\tboot\tboot.img\t%s\n' "$artifact_sha" "$image_sha" > "$bundle/flash.plan"
+  plan_sha="$(sha256sum "$bundle/flash.plan" | awk '{print $1}')"
+  cat > "$bundle/firmware.manifest" <<EOF
+format=android-dex-firmware-v2
+oem=pixel
+model=Pixel8
+device=shiba
+region=global
+bootloader=test-2
+security_patch=2026-07-01
+rollback_index=6
+artifact=factory-image.zip
+sha256=$artifact_sha
+plan=flash.plan
+plan_sha256=$plan_sha
+EOF
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$dir/private.pem" >/dev/null 2>&1 || return 1
+  openssl pkey -in "$dir/private.pem" -pubout -out "$keys/test.pem" >/dev/null 2>&1 || return 1
+  openssl dgst -sha256 -sign "$dir/private.pem" -out "$bundle/firmware.manifest.sig" "$bundle/firmware.manifest" || return 1
+  printf 'TRUSTED_KEYS_DIR="%s"\n' "$keys" > "$dir/config/android-dex-flash/flash.env"
+
+  run_flash "$dir" unused check-rollback "$bundle" >"$out" 2>&1 || { cat "$out" >&2; return 1; }
+  grep -q 'anti_rollback=index-verified' "$out" || return 1
+  grep -q 'Plano assinado validado: 2' "$out" || return 1
+
+  sed -i 's/security_patch=2026-07-01/security_patch=2026-05-01/' "$bundle/firmware.manifest"
+  openssl dgst -sha256 -sign "$dir/private.pem" -out "$bundle/firmware.manifest.sig" "$bundle/firmware.manifest" || return 1
+  run_flash "$dir" unused check-rollback "$bundle" >"$out" 2>&1 && return 1
+  grep -q 'Anti-rollback.*anterior' "$out"
+}
+
+test_samsung_requires_explicit_knox_ack() {
+  local dir out
+  dir="$(new_case knox)"; out="$dir/out"; printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
+  MOCK_MANUFACTURER=Samsung MOCK_BRAND=samsung MOCK_MODEL=SM-S928B MOCK_DEVICE=e3q \
+    run_flash "$dir" unused unlock < /dev/null >"$out" 2>&1 && return 1
+  grep -q 'KNOX PERMANENTE' "$out" || return 1
+  printf 'KNOX PERMANENTE\n' | MOCK_MANUFACTURER=Samsung MOCK_BRAND=samsung MOCK_MODEL=SM-S928B MOCK_DEVICE=e3q \
+    run_flash "$dir" unused unlock >"$out" 2>&1 || { cat "$out" >&2; return 1; }
+  grep -qi 'confirma.*física' "$out" || { cat "$out" >&2; return 1; }
+}
+
+test_oem_drivers_are_not_conflated() {
+  local dir out
+  dir="$(new_case oem-split)"; out="$dir/out"; printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
+  MOCK_MANUFACTURER=OPPO MOCK_BRAND=oppo MOCK_MODEL=FindX MOCK_DEVICE=findx run_flash "$dir" unused caps >"$out" 2>&1 || return 1
+  grep -q 'OPPO / Realme' "$out" || { cat "$out" >&2; return 1; }
+  if ! grep -q 'nunca tenta explorar' "$out" || ! grep -q 'como OnePlus' "$out"; then cat "$out" >&2; return 1; fi
+  MOCK_MANUFACTURER=Sony MOCK_BRAND=sony MOCK_MODEL=Xperia MOCK_DEVICE=xperia run_flash "$dir" unused caps >"$out" 2>&1 || return 1
+  if ! grep -q 'Sony Xperia' "$out" || ! grep -q 'chaves DRM' "$out"; then cat "$out" >&2; return 1; fi
+}
+
+test_boot_backup_and_payload_extraction() {
+  local dir out backup
+  dir="$(new_case backup-payload)"; out="$dir/out"; printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
+  MOCK_BOOT_CONTENT='known boot bytes' run_flash "$dir" unused backup-boot >"$out" 2>&1 || return 1
+  backup="$(find "$dir/state/android-dex-flash/backups" -name boot.img -type f | head -n1)"
+  [ -s "$backup" ] || return 1
+  grep -q 'format=android-dex-boot-backup-v1' "$(dirname "$backup")/backup.manifest" || return 1
+  grep -q '^sha256=' "$(dirname "$backup")/backup.manifest" || return 1
+
+  printf 'payload data\n' > "$dir/payload.bin"
+  run_flash "$dir" unused extract-payload "$dir/payload.bin" "$dir/extracted" >"$out" 2>&1 || return 1
+  [ -s "$dir/extracted/boot.img" ] && [ -s "$dir/extracted/init_boot.img" ] || return 1
+  [ "$(wc -l < "$dir/extracted/SHA256SUMS")" -eq 2 ]
+}
+
+test_pixel_temporary_recovery_is_hash_bound() {
+  local dir out sha
+  dir="$(new_case recovery)"; out="$dir/out"
+  printf 'FB-A\tfastboot\n' > "$dir/fastboot.devices"
+  printf 'recovery image\n' > "$dir/recovery.img"; sha="$(sha256sum "$dir/recovery.img" | awk '{print $1}')"
+  printf 'ALLOW_DESTRUCTIVE="1"\nREQUIRE_TYPED_CONFIRM="0"\n' > "$dir/config/android-dex-flash/flash.env"
+  MOCK_FASTBOOT_UNLOCKED=yes RECOVERY_IMG="$dir/recovery.img" RECOVERY_SHA256="$sha" \
+    run_flash "$dir" pixel --model pixel --commit boot-recovery >"$out" 2>&1 || { cat "$out" >&2; return 1; }
+  grep -q "boot $dir/recovery.img" "$dir/fastboot.log" || return 1
+  ! grep -q '^flash ' "$dir/fastboot.log"
+}
+
+test_doctor_produces_read_only_capability_report() {
+  local dir out rc=0
+  dir="$(new_case doctor)"; out="$dir/out"
+  printf 'PHONE-A\tdevice product:husky model:Pixel_8_Pro device:husky\n' > "$dir/adb.devices"
+  MOCK_SECONDARY_FEATURE=true run_doctor "$dir" --device PHONE-A >"$out" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 2 ] || return 1
+  grep -q 'diagnóstico somente leitura' "$out" || return 1
+  grep -q 'modelo=Pixel8' "$out" || return 1
+  grep -q 'feature de activities_on_secondary_displays presente' "$out" || return 1
+  grep -q 'não alterou settings, partições nem arquivos' "$out"
 }
 
 test_flash_identity_requires_unique_device() {
@@ -483,6 +627,12 @@ run_test "sinks dinâmicos legados foram removidos" test_legacy_dynamic_sinks_ar
 run_test "template udev é restrito e renderizável" test_udev_template_is_scoped_and_renderable
 run_test "modo automático e perfil OEM" test_auto_mode_and_oem_profile
 run_test "descritor de firmware assinado" test_signed_firmware_descriptor
+run_test "manifesto v2 valida plano e anti-rollback" test_signed_v2_plan_and_anti_rollback
+run_test "Samsung exige reconhecimento explícito do Knox" test_samsung_requires_explicit_knox_ack
+run_test "drivers OPPO e Sony não são confundidos com OnePlus" test_oem_drivers_are_not_conflated
+run_test "backup de boot e extração de payload" test_boot_backup_and_payload_extraction
+run_test "recovery temporário Pixel exige vínculo e hash" test_pixel_temporary_recovery_is_hash_bound
+run_test "doctor gera relatório somente leitura" test_doctor_produces_read_only_capability_report
 run_test "flash exige identidade única" test_flash_identity_requires_unique_device
 run_test "identidade ambígua/offline bloqueia sessão" test_ambiguous_or_offline_identity_blocks_session
 run_test "listagem e seleção explícita de aparelho" test_device_listing_and_explicit_selection

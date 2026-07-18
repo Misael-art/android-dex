@@ -6,7 +6,7 @@
 #   android-dex                 # auto-detecta (USB e depois Wi-Fi salvo)
 #   android-dex --usb           # força USB
 #   android-dex --wifi          # força Wi-Fi (usa DEVICE_IP do config)
-#   android-dex 192.168.1.50    # conecta neste IP (porta 5555 assumida)
+#   android-dex 192.168.1.50    # conecta neste IP (usa ADB_TCP_PORT)
 #   android-dex 192.168.1.50:37000
 #   android-dex --mirror        # espelha a tela real em vez do modo DeX
 #   android-dex --list          # lista aparelhos e seus estados

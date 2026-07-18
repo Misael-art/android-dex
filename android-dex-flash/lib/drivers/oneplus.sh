@@ -1,27 +1,21 @@
 #!/usr/bin/env bash
-# drivers/oneplus.sh — OnePlus / OPPO / Realme (e Sony, fluxo próximo). Base
-# fastboot. OnePlus costuma permitir 'fastboot flashing unlock' direto; OPPO/
-# Realme muitas vezes exigem uma app oficial de "deep testing" para liberar.
+# drivers/oneplus.sh — OnePlus. Base fastboot; modelos e operadoras podem impor
+# restrições adicionais, por isso a gravação permanece guiada.
 
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/generic.sh"
 
 driver_caps() {
   cat >&2 <<TXT
-  OnePlus / OPPO / Realme (e Sony):
+  OnePlus:
 
-    • unlock         → OnePlus: 'fastboot flashing unlock' direto (com
-                       "Desbloqueio de OEM" ligado). OPPO/Realme (ColorOS/
-                       RealmeUI): normalmente exigem a app oficial "In-Depth Test"
-                       para liberar o unlock — passo manual/oficial.
-                       Sony: unlock por código no site oficial da Sony.
+    • unlock         → 'fastboot flashing unlock' (com "Desbloqueio de OEM"
+                       ligado), quando o modelo/operadora permitir.
     • root           → Magisk sobre o boot.img do firmware do modelo → flash.
     • flash-firmware → OnePlus: payload.bin de OTA (payload-dumper) + fastboot,
                        ou MSMDownloadTool (Windows) p/ recuperação profunda.
 
   O que se perde:
-    • Garantia; Play Integrity cai; wipe no unlock. OPPO/Realme costumam ser
-      mais restritivos; alguns modelos praticamente não desbloqueiam.
-    • Sony: câmera/recursos podem degradar por perda de chaves DRM.
+    • Garantia; Play Integrity cai; wipe no unlock.
 
   Requisitos: fastboot no host. Para OTAs A/B, 'payload-dumper' ajuda a extrair.
 TXT
@@ -32,8 +26,8 @@ driver_warnings() {
   case "$action" in
     unlock)
       warn_irreversible \
-        "APAGA o aparelho. OPPO/Realme podem exigir a app oficial 'In-Depth Test'." \
-        "Sony perde chaves DRM (câmera/recursos degradam). Play Integrity cai."
+        "APAGA o aparelho; confirme antes se o modelo/operadora permite unlock." \
+        "Play Integrity cai e apps de banco/pagamento podem parar."
       ;;
     root) warn_irreversible "boot.img do MESMO firmware do modelo — outro = bootloop." ;;
     flash-firmware) warn_irreversible "Use firmware/OTA oficial do modelo; anti-rollback pode brickar downgrade." ;;
@@ -42,16 +36,15 @@ driver_warnings() {
 
 driver_unlock() {
   fb_require || return 1
-  log_info "OnePlus: 'flashing unlock' direto. OPPO/Realme: pode falhar sem a app oficial de teste."
+  log_info "OnePlus: usando o protocolo canônico 'fastboot flashing unlock'."
   warn_irreversible "'fastboot flashing unlock' APAGA todos os dados."
   fb_run flashing unlock
   fb_run reboot
-  log_ok "Comando de unlock enviado. Se falhou em OPPO/Realme, use a app oficial 'In-Depth Test' e tente de novo."
+  log_ok "Comando de unlock enviado. Se foi recusado, confirme elegibilidade do modelo/operadora."
 }
 
 # root / flash-firmware / restore-boot herdados do generic.sh (fastboot).
 driver_commit_supported() {
-  # Este driver agrega OEMs com protocolos incompatíveis (OnePlus, OPPO,
-  # Realme e Sony). Até separá-los e validar cada fluxo, permanece guiado.
+  # Permanece guiado até validação em hardware por geração/modelo.
   return 1
 }

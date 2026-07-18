@@ -64,5 +64,5 @@ driver_warnings() {
 # Neste estágio, somente o unlock canônico do Pixel pode executar no host.
 # Root/firmware/restore permanecem guiados até validação forte do artefato.
 driver_commit_supported() {
-  [ "$1" = "unlock" ]
+  case "$1" in unlock|boot-recovery) return 0 ;; *) return 1 ;; esac
 }

@@ -13,9 +13,13 @@
 #   android-dex-flash info                 # Fase 0 — leitura pura, risco ZERO
 #   android-dex-flash caps                 # o que é possível NESTE aparelho
 #   android-dex-flash verify-firmware DIR  # assinatura/hash/modelo; não grava
+#   android-dex-flash check-rollback DIR    # compara patch/índice anti-rollback
+#   android-dex-flash backup-boot           # lê boot/init_boot e salva SHA-256
+#   android-dex-flash extract-payload FILE [DIR] # extrai payload.bin localmente
 #   android-dex-flash unlock [--commit]    # desbloqueia o bootloader (OEM-roteado)
 #   android-dex-flash root   [--commit]    # patch boot.img c/ Magisk + flash
 #   android-dex-flash flash-firmware PATH [--commit]   # grava firmware oficial
+#   android-dex-flash boot-recovery [--commit] # recovery temporário, sem flash
 #   android-dex-flash reboot-bootloader    # reinicia p/ fastboot/download
 #
 # Flags globais:
@@ -67,7 +71,7 @@ parse_globals() {
       --model)    shift; EXPECT_MODEL="${1:-}" ;;
       --yes)      ASSUME_YES=1 ;;
       -h|--help)  usage; exit 0 ;;
-      info|caps|verify-firmware|unlock|root|flash-firmware|reboot-bootloader|restore-boot)
+      info|caps|verify-firmware|check-rollback|backup-boot|extract-payload|unlock|root|flash-firmware|boot-recovery|reboot-bootloader|restore-boot)
         [ -z "$CMD" ] && CMD="$1" || POSITIONAL+=("$1") ;;
       *) POSITIONAL+=("$1") ;;
     esac
@@ -155,10 +159,29 @@ cmd_verify_firmware() {
   log_ok "Descritor autenticado e compatível. Nenhuma partição foi gravada."
 }
 
+cmd_check_rollback() {
+  local input="${POSITIONAL[0]:-}"
+  fp_collect
+  verify_firmware_descriptor "$input" >/dev/null
+  printf 'anti_rollback=%s\n' "${FW_ANTI_ROLLBACK_STATUS:-unknown}"
+  printf 'current_patch=%s\ntarget_patch=%s\n' "${FP_PATCH:-unknown}" "${FW_SECURITY_PATCH:-unknown}"
+  printf 'target_rollback_index=%s\n' "${FW_ROLLBACK_INDEX:-unknown}"
+  log_ok "Verificação anti-rollback concluída sem gravar no aparelho."
+}
+
+cmd_backup_boot() {
+  fp_collect
+  backup_boot_partition
+}
+
+cmd_extract_payload() {
+  extract_payload_bundle "${POSITIONAL[0]:-}" "${POSITIONAL[1]:-}"
+}
+
 print_commit_policy() {
   local action label
   printf '\n%sPolítica de execução atual:%s\n' "$C_BOLD" "$C_RESET" >&2
-  for action in unlock root flash-firmware restore-boot; do
+  for action in unlock root flash-firmware restore-boot boot-recovery; do
     if declare -F driver_commit_supported >/dev/null 2>&1 && driver_commit_supported "$action"; then
       label="--commit disponível"
     else
@@ -177,6 +200,9 @@ run_destructive() {
   load_driver "$FP_OEM"
 
   driver_warnings "$action"
+  [ "$action" != boot-recovery ] || warn_irreversible \
+    "Recovery customizada executa código privilegiado no aparelho, mesmo sem gravar partições." \
+    "Use somente imagem do modelo exato e confira seu SHA-256."
   if [ "$DRY_RUN" != "1" ]; then
     if ! declare -F driver_commit_supported >/dev/null 2>&1 || ! driver_commit_supported "$action"; then
       die "Execução automática de '$action' não é suportada com segurança pelo driver '$FP_OEM'. Use --dry-run para obter o roteiro guiado e a ferramenta oficial do fabricante para concluir a gravação."
@@ -203,6 +229,10 @@ run_destructive() {
     root)            driver_root ;;
     flash-firmware)  driver_flash_firmware "$@" ;;
     restore-boot)    driver_restore_boot ;;
+    boot-recovery)
+      declare -F driver_boot_recovery >/dev/null 2>&1 || die "Driver '$FP_OEM' não oferece boot temporário de recovery."
+      driver_boot_recovery
+      ;;
     *) die "Ação desconhecida: $action" ;;
   esac
 }
@@ -223,10 +253,14 @@ main() {
     info)              cmd_info ;;
     caps)              cmd_caps ;;
     verify-firmware)   cmd_verify_firmware ;;
+    check-rollback)    cmd_check_rollback ;;
+    backup-boot)       cmd_backup_boot ;;
+    extract-payload)   cmd_extract_payload ;;
     unlock)            run_destructive unlock ;;
     root)              run_destructive root ;;
     flash-firmware)    run_destructive flash-firmware "${POSITIONAL[@]:-}" ;;
     restore-boot)      run_destructive restore-boot ;;
+    boot-recovery)     run_destructive boot-recovery ;;
     reboot-bootloader) cmd_reboot_bootloader ;;
     *)                 usage; exit 1 ;;
   esac

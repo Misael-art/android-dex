@@ -26,6 +26,33 @@ android-dex-flash verify-firmware /caminho/do/bundle
 ```
 
 A validação exige assinatura, SHA-256, OEM e modelo/device compatíveis com o
-aparelho conectado. Região, revisão de bootloader, anti-rollback, slots e plano
-de partições ainda não são automaticamente verificáveis; por isso um manifesto
-válido não habilita gravação automática nesta versão.
+aparelho conectado.
+
+## Formato v2
+
+O formato `android-dex-firmware-v2` acrescenta:
+
+- `security_patch=AAAA-MM-DD`, comparado ao patch instalado quando o aparelho
+  está em ADB;
+- `rollback_index=N`, comparado quando o OEM expõe um índice por getprop ou
+  fastboot;
+- `plan=flash.plan` e `plan_sha256=...`, inventário assinado das operações e de
+  cada imagem. O plano é dado estrito, nunca shell.
+
+Cada linha de `flash.plan` possui quatro colunas separadas por TAB:
+
+```text
+update<TAB>all<TAB>factory-image.zip<TAB>SHA256
+flash<TAB>boot<TAB>boot.img<TAB>SHA256
+```
+
+Use os arquivos `firmware.manifest.example` e `flash.plan.example` como base.
+Mesmo o v2 não executa scripts do bundle. Se patch/índice atual não puder ser
+lido, o resultado anti-rollback fica inconclusivo e a gravação automática
+permanece bloqueada; use a ferramenta oficial do fabricante.
+
+Validação dedicada:
+
+```bash
+android-dex-flash check-rollback /caminho/do/bundle
+```

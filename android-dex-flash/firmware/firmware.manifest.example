@@ -1,8 +1,12 @@
-format=android-dex-firmware-v1
+format=android-dex-firmware-v2
 oem=pixel
-model=Pixel 8
+model=Pixel8
 device=shiba
 region=global
-bootloader=shiba-15.0
+bootloader=exemplo
+security_patch=2026-07-01
+rollback_index=6
 artifact=factory-image.zip
-sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+sha256=0000000000000000000000000000000000000000000000000000000000000000
+plan=flash.plan
+plan_sha256=0000000000000000000000000000000000000000000000000000000000000000

@@ -1,0 +1,24 @@
+# Copie para $env:APPDATA\AndroidDex\config.ps1
+$AdxMode = 'auto'                 # auto | dex | mirror
+$AdxConnection = 'auto'           # auto | usb | wifi
+$AdxDeviceIp = ''                 # HOST:PORTA salvo pelo adb
+$AdxDeviceSerial = ''             # obrigatorio em automacoes com varios devices
+$AdxDisplayRes = '1920x1080'
+$AdxDisplayDpi = 160
+$AdxMaxFps = 60
+$AdxVideoBitrate = '8M'
+$AdxAudio = $true
+$AdxStayAwake = $true
+$AdxTurnScreenOff = $false
+$AdxEnableFreeformTweaks = $true
+$AdxRestoreTweaksOnExit = $false
+$AdxReconnect = $true
+$AdxBackoffBase = 2
+$AdxBackoffCap = 30
+$AdxHealthySessionSeconds = 15
+$AdxAutoDexMinSdk = 35
+$AdxWindowTitle = 'Android DEX'
+$AdxStartApp = ''
+$AdxVdSystemDecorations = $true
+$AdxExtraArgs = @()
+$AdxDebug = $false

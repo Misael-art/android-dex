@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: android-dex-ui/pyproject.toml
+
+      - name: Install AppImage runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1
+
+      - name: Fetch official appimagetool
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimagetool"
+          chmod 0755 "$RUNNER_TEMP/appimagetool"
+
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          APPIMAGETOOL_BIN: ${{ runner.temp }}/appimagetool
+        run: make appimage
+
+      - name: Smoke AppImage offscreen
+        run: bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage
+
+      - name: Build Python wheel and sdist
+        run: |
+          python -m pip install --upgrade build
+          python -m build --outdir dist_ui android-dex-ui
+
+      - name: Assemble release artifacts
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist_assets
+          # Toolkits em shell (instaláveis pelo install.sh de cada um)
+          tar czf "dist_assets/android-dex-kit-${VERSION}.tar.gz" android-dex-kit
+          tar czf "dist_assets/android-dex-flash-${VERSION}.tar.gz" android-dex-flash
+          # AppImage autossuficiente (UI + Qt + Python)
+          cp android-dex-ui/build/Android-DEX-x86_64.AppImage dist_assets/
+          # Distribuições Python da UI
+          cp dist_ui/*.whl dist_ui/*.tar.gz dist_assets/
+          # Checksums de tudo
+          ( cd dist_assets && sha256sum ./* > SHA256SUMS && cat SHA256SUMS )
+          ls -l dist_assets
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist_assets/* \
+            --title "Android-DEX $GITHUB_REF_NAME" \
+            --notes-file CHANGELOG.md \
+            --verify-tag

@@ -174,9 +174,10 @@ install_files() {
 
   install -m 0755 "$SRC_DIR/bin/android-dex"         "$bindir/android-dex"
   install -m 0755 "$SRC_DIR/bin/android-dex-connect" "$bindir/android-dex-connect"
+  install -m 0755 "$SRC_DIR/bin/android-dex-doctor"  "$bindir/android-dex-doctor"
   install -m 0644 "$SRC_DIR/lib/common.sh"           "$libdir/common.sh"
   install -m 0644 "$SRC_DIR"/profiles/*.env          "$profilesdir/"
-  log_ok "Binários em $bindir (android-dex, android-dex-connect)"
+  log_ok "Binários em $bindir (android-dex, android-dex-connect, android-dex-doctor)"
 
   if [ -f "$ADX_CONFIG_FILE" ]; then
     log_info "Config já existe, preservado: $ADX_CONFIG_FILE"

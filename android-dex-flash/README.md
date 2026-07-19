@@ -31,7 +31,9 @@ botão errado — e dá a esta ferramenta um ciclo de consentimento próprio.
     de outro aparelho (causa clássica de hard-brick);
   - verifica **bateria mínima** (padrão 40%);
   - verifica **hash sha256** dos insumos quando informado;
-  - **backup** best-effort do boot antes de rootar.
+  - cria **backup de boot/init_boot** com metadados e SHA-256 quando o transporte
+    permite leitura;
+  - compara `security_patch` e índice anti-rollback de manifestos v2.
 - **Avisos específicos por OEM** (ex.: Knox e-fuse na Samsung é permanente).
 - **Auditoria:** todo comando é logado em
   `~/.local/state/android-dex-flash/android-dex-flash.log`.
@@ -62,6 +64,9 @@ Comece **sempre** pelo diagnóstico — ele nunca grava nada:
 android-dex-flash info     # marca/modelo/SO/bootloader + o que é possível/se perde
 android-dex-flash caps     # capacidades e riscos detalhados do seu modelo
 android-dex-flash verify-firmware DIR # assinatura, hash e identidade; não grava
+android-dex-flash check-rollback DIR  # compara patch/índice sem gravar
+android-dex-flash backup-boot         # lê boot/init_boot e cria manifesto local
+android-dex-flash extract-payload payload.bin DIR # extrai OTA A/B + hashes
 ```
 
 Ações e roteiros (todos em dry-run por padrão):
@@ -73,6 +78,8 @@ android-dex-flash root                   # valida insumos e mostra o roteiro Mag
 android-dex-flash flash-firmware DIR     # valida o tipo do pacote e orienta
 android-dex-flash reboot-bootloader      # reinicia p/ fastboot/download
 android-dex-flash --model sunfish unlock --commit   # trava o modelo esperado
+RECOVERY_IMG=recovery.img RECOVERY_SHA256=... \
+  android-dex-flash --model shiba boot-recovery --commit # boot temporário Pixel
 ```
 
 Insumos (boot.img de estoque, imagem corrigida pelo Magisk, código de unlock da
@@ -88,16 +95,19 @@ Motorola, etc.) são informados por variáveis no
 | **Samsung** | modo Download + confirmação física | **Queima o Knox e-fuse — permanente.** Usa `heimdall`, não fastboot. Muitos Snapdragon (EUA) não desbloqueiam. |
 | **Xiaomi/Redmi/POCO** | Mi Unlock Tool oficial (Windows) + espera | A ferramenta **guia** o processo oficial; não burla a espera/login. |
 | **Motorola/Lenovo** | código do site oficial | 2 passos: `get_unlock_data` → código por e-mail → `oem unlock <código>`. |
-| **OnePlus/OPPO/Realme/Sony** | `fastboot flashing unlock` | OPPO/Realme podem exigir app oficial "In-Depth Test"; Sony perde DRM. |
+| **OnePlus** | `fastboot flashing unlock` | Elegibilidade varia por modelo/operadora; permanece guiado. |
+| **OPPO/Realme** | fluxo oficial Deep Testing, quando oferecido | Nunca são tratados como OnePlus nem burlam região/conta. |
+| **Sony Xperia** | código do portal oficial Sony | Pode perder chaves DRM e degradar câmera/recursos. |
 
 Fabricante não mapeado cai no driver **genérico** em modo somente guiado:
 nenhuma ação destrutiva aceita `--commit`.
 
 ## Root (Magisk) — como funciona aqui
 
-O método moderno e **reversível**: pegue o `boot.img` de **estoque** do firmware
-que está no aparelho, corrija-o com o app **Magisk** (`magisk_patched.img`) e
-grave com o procedimento oficial do modelo. A ferramenta aceita o `PATCHED_IMG`,
+O método moderno e **reversível**: pegue `boot.img` ou `init_boot.img` de
+**estoque** do firmware que está no aparelho, corrija-o com o app **Magisk**
+(`magisk_patched.img`) e grave com o procedimento oficial do modelo. Selecione
+`ROOT_PARTITION=boot` ou `init_boot`. A ferramenta aceita o `PATCHED_IMG`,
 verifica hash (se informado) e mostra a sequência, mas neste estágio não grava
 automaticamente. Restaurar o boot de estoque remove o root.
 
@@ -117,10 +127,25 @@ não executa scripts do bundle nem grava partições automaticamente. A conclus�
 Bundles podem trazer `firmware.manifest` + `firmware.manifest.sig`. O comando
 `verify-firmware` verifica assinatura OpenSSL contra uma chave pública colocada
 explicitamente em `~/.config/android-dex-flash/trusted-keys/`, confere SHA-256 e
-vincula OEM/modelo/codename ao único aparelho selecionado. O formato e o comando
-de assinatura estão em [`firmware/README.md`](firmware/README.md). Região,
-anti-rollback e plano de partições ainda são informativos, portanto até um
-manifesto válido permanece sem permissão de gravação automática.
+vincula OEM/modelo/codename ao único aparelho selecionado. O formato v2 também
+valida plano de partições, hashes individuais, patch de segurança e índice
+anti-rollback quando o aparelho o expõe. O formato e o comando de assinatura
+estão em [`firmware/README.md`](firmware/README.md). Região e revisões de
+bootloader proprietárias ainda podem exigir a ferramenta oficial; um resultado
+inconclusivo permanece sem permissão de gravação automática.
+
+## Backup, payload e recuperação
+
+- `backup-boot` tenta `fastboot fetch` ou leitura root via ADB; sem suporte do
+  aparelho, aceita `BOOT_IMG` oficial como cópia conhecida. Só publica arquivo
+  não vazio e cria manifesto + SHA-256.
+- `extract-payload` chama um `payload-dumper-go` já instalado, escreve em
+  diretório vazio e gera `SHA256SUMS`; nunca baixa executáveis.
+- `boot-recovery` usa `fastboot boot`, sem gravar partição. Execução real está
+  liberada apenas no driver Pixel e exige bootloader confirmado como
+  desbloqueado, `--model` e `RECOVERY_SHA256`.
+- `restore-boot` continua fail-closed para gravação automática, mas gera o
+  roteiro exato para `boot` ou `init_boot` e verifica `BOOT_SHA256`.
 
 ## Limites honestos (o que ela NÃO faz)
 
@@ -129,7 +154,8 @@ manifesto válido permanece sem permissão de gravação automática.
   modelo, região, revisão de bootloader e layout de partições.
 - Não desbloqueia aparelhos que o fabricante travou (muitos Galaxy Snapdragon,
   Huawei pós-2018, bootloaders de operadora).
-- Não impede brick por firmware errado além dos guard rails — por isso os avisos.
+- Não promete detectar todo fuse proprietário. Se anti-rollback ficar
+  inconclusivo, orienta usar a ferramenta oficial e não libera commit.
 - Não restaura Knox nem Play Integrity depois de perdidos.
 
 ## Desinstalação
@@ -138,6 +164,21 @@ manifesto válido permanece sem permissão de gravação automática.
 ./uninstall.sh            # remove binário e libs (preserva config/backups)
 ./uninstall.sh --purge    # remove também config, logs e backups
 ```
+
+## Integração legível por máquina
+
+`--json` reserva `stdout` para um único documento no formato
+`android-dex.machine.v1`; avisos, roteiro e logs humanos seguem em `stderr`.
+
+```bash
+android-dex-flash --json --non-interactive info
+android-dex-flash --json --non-interactive caps
+android-dex-flash --json --non-interactive check-rollback DIRETORIO
+```
+
+O modo não interativo **não autoriza gravação**. A combinação
+`--non-interactive --commit` é recusada; o serviço usa um plano temporário e
+fornece a confirmação explícita ao script somente no momento do `apply`.
 
 ---
 

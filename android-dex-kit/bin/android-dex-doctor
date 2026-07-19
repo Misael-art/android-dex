@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# android-dex-doctor — diagnóstico somente leitura para validar host/aparelho.
+set -uo pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+for _cand in "$(dirname "$_self")/../lib/common.sh" "${XDG_DATA_HOME:-$HOME/.local/share}/android-dex/lib/common.sh"; do
+  [ -f "$_cand" ] && { . "$_cand"; _COMMON_OK=1; break; }
+done
+[ "${_COMMON_OK:-0}" = 1 ] || { echo "FATAL: common.sh não encontrado" >&2; exit 1; }
+adx_load_config
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --device) [ $# -ge 2 ] || die "--device exige SERIAL"; DEVICE_SERIAL="$2"; shift ;;
+    --device=*) DEVICE_SERIAL="${1#*=}" ;;
+    -h|--help) sed -n '2,3p' "$_self" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "Argumento inválido: $1" ;;
+  esac
+  shift
+done
+
+PASS=0; WARN=0
+check_ok() { PASS=$((PASS + 1)); printf '  [OK]   %s\n' "$*"; }
+check_warn() { WARN=$((WARN + 1)); printf '  [AVISO] %s\n' "$*"; }
+
+printf 'Android-DEX Doctor — diagnóstico somente leitura\n\n'
+printf 'Host:\n'
+if have adb; then check_ok "adb: $(adb version 2>/dev/null | head -n1)"; else check_warn 'adb ausente'; fi
+if have scrcpy; then
+  ver="$(scrcpy --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)"
+  if [ -n "$ver" ] && version_ge "$ver" 3.0; then check_ok "scrcpy $ver suporta display virtual"; else check_warn "scrcpy ${ver:-?} sem garantia de --new-display >= 3.0"; fi
+else check_warn 'scrcpy ausente'; fi
+if [ -r /etc/udev/rules.d/51-android-dex.rules ] || [ -r /usr/lib/udev/rules.d/51-android.rules ]; then check_ok 'regra udev Android instalada'; else check_warn 'regra udev do kit/distro não encontrada'; fi
+
+have adb || { printf '\nResultado: bloqueado — instale adb.\n'; exit 1; }
+adb_ensure_server
+printf '\nDispositivos observados:\n'; adb_list_devices | sed 's/^/  /'
+
+serial=""
+if [ -n "$DEVICE_SERIAL" ]; then
+  adb_serial_online "$DEVICE_SERIAL" || die "DEVICE_SERIAL '$DEVICE_SERIAL' não está online."
+  serial="$DEVICE_SERIAL"
+else
+  serial="$(adb_choose_serial ANY)" || { printf '\nResultado: conecte/autorize um único aparelho ou use --device.\n'; exit 1; }
+fi
+
+manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r')"
+model="$(adb -s "$serial" shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+device="$(adb -s "$serial" shell getprop ro.product.device 2>/dev/null | tr -d '\r')"
+sdk="$(adb -s "$serial" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')"
+secondary="$(adb -s "$serial" shell cmd package has-feature android.software.activities_on_secondary_displays 2>/dev/null | tr -d '\r')"
+freeform="$(adb -s "$serial" shell settings get global enable_freeform_support 2>/dev/null | tr -d '\r')"
+profile="$(printf '%s' "$manufacturer" | tr '[:upper:]' '[:lower:]')"
+case "$profile" in *samsung*) profile=samsung;; *google*) profile=google;; *xiaomi*|*redmi*|*poco*) profile=xiaomi;; *motorola*|*lenovo*) profile=motorola;; *oneplus*|*oppo*|*realme*) profile=oneplus;; *) profile=generic;; esac
+
+printf '\nAparelho selecionado:\n'
+printf '  serial=%s\n  fabricante=%s\n  modelo=%s\n  device=%s\n  sdk=%s\n  perfil=%s\n' "$serial" "${manufacturer:-?}" "${model:-?}" "${device:-?}" "${sdk:-?}" "$profile"
+if [[ "$sdk" =~ ^[0-9]+$ ]] && [ "$sdk" -ge "$AUTO_DEX_MIN_SDK" ]; then check_ok "SDK $sdk atende a política automática"; else check_warn "SDK ${sdk:-?} ficará em mirror por padrão"; fi
+if [ "$secondary" = true ]; then check_ok 'feature de activities_on_secondary_displays presente'; else check_warn 'feature de display secundário não confirmada'; fi
+if [ "$profile" = samsung ] || [ "$secondary" = true ] || [ "$freeform" = 1 ]; then check_ok 'há sinal de capacidade desktop'; else check_warn 'DeX não confirmado; mirror é a escolha estável'; fi
+
+printf '\nConectividade:\n'
+if adx_is_tcp_serial "$serial"; then check_ok "ADB Wi-Fi online em $serial"; else check_ok "ADB USB autorizado em $serial"; fi
+mdns_count="$(adb_mdns_connect_endpoints | wc -l | tr -d ' ')"
+if [ "$mdns_count" -gt 0 ]; then check_ok "$mdns_count endpoint(s) mDNS de Depuração sem fio"; else check_warn 'nenhum endpoint mDNS (normal se Depuração sem fio estiver desligada)'; fi
+
+printf '\nResumo: %s verificações aprovadas; %s aviso(s).\n' "$PASS" "$WARN"
+printf 'Este relatório não alterou settings, partições nem arquivos do aparelho.\n'
+[ "$WARN" -eq 0 ] || exit 2

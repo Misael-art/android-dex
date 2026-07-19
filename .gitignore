@@ -23,3 +23,10 @@ firmware-signing*.pem
 .DS_Store
 *.swp
 *~
+
+# Artefatos locais da interface Python/AppImage
+*.egg-info/
+__pycache__/
+.pytest_cache/
+android-dex-ui/build/
+android-dex-ui/dist/

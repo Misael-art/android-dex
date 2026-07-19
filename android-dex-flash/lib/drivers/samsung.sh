@@ -71,6 +71,7 @@ sm_check_oem_unlock() {
 
 driver_unlock() {
   sm_check_oem_unlock
+  confirm_typed_always "KNOX PERMANENTE" "Para reconhecer a perda irreversível do Knox, digite"
   cat >&2 <<'TXT'
 
   Desbloqueio Samsung (não é um comando único de host):
@@ -125,6 +126,10 @@ TXT
 
 driver_restore_boot() {
   die "Restauração Samsung: regrave o AP OFICIAL do seu firmware via 'flash-firmware' (heimdall)."
+}
+
+driver_boot_recovery() {
+  die "Samsung não suporta 'fastboot boot'. Recovery exige pacote AP específico e permanece somente guiada."
 }
 
 # Unlock é físico/manual; root, firmware e restore exigem descritores por modelo.

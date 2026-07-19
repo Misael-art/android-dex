@@ -1,0 +1,9 @@
+module AndroidDex
+singleton Theme 1.0 Theme.qml
+AppButton 1.0 AppButton.qml
+AppComboBox 1.0 AppComboBox.qml
+AppTextArea 1.0 AppTextArea.qml
+AppTextField 1.0 AppTextField.qml
+NavItem 1.0 NavItem.qml
+SafetyConfirmationDialog 1.0 SafetyConfirmationDialog.qml
+StatusPill 1.0 StatusPill.qml

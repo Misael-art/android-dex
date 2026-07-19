@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Android-DEX
+Comment=Modo desktop seguro e manutenção Android guiada
+Exec=android-dex-ui
+Icon=android-dex-ui
+Terminal=false
+Categories=Utility;System;
+Keywords=Android;DeX;scrcpy;ADB;
+StartupNotify=true

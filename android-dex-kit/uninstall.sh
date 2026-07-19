@@ -30,7 +30,7 @@ if have systemctl; then
 fi
 if [ -x "$HOME/.local/bin/android-dex" ]; then "$HOME/.local/bin/android-dex" --stop 2>/dev/null || true; fi
 
-rm -f "$HOME/.local/bin/android-dex" "$HOME/.local/bin/android-dex-connect"
+rm -f "$HOME/.local/bin/android-dex" "$HOME/.local/bin/android-dex-connect" "$HOME/.local/bin/android-dex-doctor"
 rm -f "$XDG_DATA_HOME/applications/android-dex.desktop"
 rm -f "$XDG_DATA_HOME/icons/hicolor/scalable/apps/android-dex.svg"
 rm -f "$XDG_CONFIG_HOME/systemd/user/android-dex.service"

@@ -6,7 +6,7 @@
 #   android-dex                 # auto-detecta (USB e depois Wi-Fi salvo)
 #   android-dex --usb           # força USB
 #   android-dex --wifi          # força Wi-Fi (usa DEVICE_IP do config)
-#   android-dex 192.168.1.50    # conecta neste IP (porta 5555 assumida)
+#   android-dex 192.168.1.50    # conecta neste IP (usa ADB_TCP_PORT)
 #   android-dex 192.168.1.50:37000
 #   android-dex --mirror        # espelha a tela real em vez do modo DeX
 #   android-dex --list          # lista aparelhos e seus estados
@@ -50,6 +50,8 @@ SESSION_TOKEN=""
 SESSION_LOCK_HELD=0
 SUPERVISOR_STATE_FILE="$ADX_STATE_DIR/supervisor.state"
 ACTION="run"
+JSON_OUTPUT=0
+NON_INTERACTIVE=0
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -69,6 +71,8 @@ parse_args() {
       --status)  ACTION="status" ;;
       --stop)    ACTION="stop" ;;
       --restore-tweaks) ACTION="restore-tweaks" ;;
+      --json)    JSON_OUTPUT=1 ;;
+      --non-interactive) NON_INTERACTIVE=1; ONCE=1; RECONNECT=0 ;;
       --device)
         [ $# -ge 2 ] || die "--device exige um SERIAL. Use --list para consultar."
         DEVICE_SERIAL="$2"; shift
@@ -81,6 +85,35 @@ parse_args() {
     esac
     shift
   done
+}
+
+json_quote() {
+  local value="${1-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  printf '"%s"' "$value"
+}
+
+devices_json() {
+  local first=1 serial state rest model device transport
+  printf '['
+  while read -r serial state rest; do
+    [ -n "${serial:-}" ] || continue
+    [ "$serial" != "List" ] || continue
+    model=""; device=""
+    if [[ " $rest " =~ [[:space:]]model:([^[:space:]]+) ]]; then model="${BASH_REMATCH[1]//_/ }"; fi
+    if [[ " $rest " =~ [[:space:]]device:([^[:space:]]+) ]]; then device="${BASH_REMATCH[1]}"; fi
+    case "$serial" in *:*) transport="Wi-Fi" ;; *) transport="USB" ;; esac
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '{"serial":%s,"state":%s,"model":%s,"device":%s,"transport":%s,"authorized":%s}' \
+      "$(json_quote "$serial")" "$(json_quote "$state")" "$(json_quote "$model")" \
+      "$(json_quote "$device")" "$(json_quote "$transport")" \
+      "$([ "$state" = device ] && printf true || printf false)"
+  done < <(adb devices -l 2>/dev/null)
+  printf ']'
 }
 
 # ---------------------------------------------------------------------------
@@ -459,6 +492,15 @@ supervisor() {
 # ---------------------------------------------------------------------------
 cmd_status() {
   adb_ensure_server
+  if [ "$JSON_OUTPUT" = 1 ]; then
+    local active=false pid=null
+    if read_supervisor_state && supervisor_state_is_live; then active=true; pid="$STATE_PID"; fi
+    printf '{"format":"android-dex.machine.v1","mode":%s,"connection":%s,"deviceIp":%s,"devices":' \
+      "$(json_quote "$MODE")" "$(json_quote "$CONNECTION")" "$(json_quote "${DEVICE_IP:-}")"
+    devices_json
+    printf ',"supervisor":{"active":%s,"pid":%s}}\n' "$active" "$pid"
+    return
+  fi
   printf '%sAndroid-DEX — estado%s\n' "$C_BOLD" "$C_RESET"
   printf '  config      : %s\n' "$ADX_CONFIG_FILE"
   printf '  modo        : %s\n' "$MODE"
@@ -475,6 +517,12 @@ cmd_status() {
 
 cmd_list() {
   adb_ensure_server
+  if [ "$JSON_OUTPUT" = 1 ]; then
+    printf '{"format":"android-dex.machine.v1","devices":'
+    devices_json
+    printf '}\n'
+    return
+  fi
   adb_list_devices
   printf '\nUse: android-dex --device SERIAL [--usb|--wifi]\n'
 }
@@ -616,13 +664,24 @@ main() {
   case "$ACTION" in
     list) cmd_list; return ;;
     status) cmd_status; return ;;
-    stop) cmd_stop; return ;;
-    restore-tweaks) cmd_restore_tweaks; return ;;
+    stop)
+      cmd_stop
+      if [ "$JSON_OUTPUT" = 1 ]; then printf '{"format":"android-dex.machine.v1","stopped":true}\n'; fi
+      return
+      ;;
+    restore-tweaks)
+      cmd_restore_tweaks
+      if [ "$JSON_OUTPUT" = 1 ]; then printf '{"format":"android-dex.machine.v1","restored":true,"serial":%s}\n' "$(json_quote "$TARGET_SERIAL")"; fi
+      return
+      ;;
   esac
   acquire_session_lock
   trap handle_signal INT TERM
   trap cleanup EXIT
   preflight
   supervisor
+  if [ "$JSON_OUTPUT" = 1 ]; then
+    printf '{"format":"android-dex.machine.v1","completed":true,"serial":%s,"mode":%s}\n' "$(json_quote "$TARGET_SERIAL")" "$(json_quote "$MODE")"
+  fi
 }
 main "$@"

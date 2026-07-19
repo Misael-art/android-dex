@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://android-dex.local/schemas/rpc-request.schema.json",
+  "title": "Android-DEX JSON-RPC request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "id", "method", "params"],
+  "properties": {
+    "jsonrpc": {"const": "2.0"},
+    "id": {"type": ["string", "integer"]},
+    "method": {
+      "enum": [
+        "system.snapshot",
+        "device.list",
+        "desktop.plan",
+        "desktop.start",
+        "desktop.stop",
+        "wifi.discover",
+        "wifi.pair",
+        "wifi.connect",
+        "session.list",
+        "doctor.run",
+        "tweaks.restore",
+        "maintenance.capabilities",
+        "firmware.verify",
+        "firmware.checkRollback",
+        "firmware.backupBoot",
+        "firmware.extractPayload",
+        "maintenance.plan",
+        "maintenance.apply",
+        "maintenance.cancel",
+        "job.status",
+        "events.poll"
+      ]
+    },
+    "params": {"type": "object"}
+  }
+}

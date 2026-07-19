@@ -39,7 +39,8 @@ fb_unlock() {
 # Requer que o usuário forneça o boot.img de estoque correspondente ao firmware
 # instalado (extraído da imagem de fábrica/OTA do próprio modelo).
 fb_root_magisk() {
-  local boot_stock="${BOOT_IMG:-}"
+  local boot_stock="${BOOT_IMG:-}" partition="${ROOT_PARTITION:-boot}"
+  case "$partition" in boot|init_boot) ;; *) die "ROOT_PARTITION deve ser boot ou init_boot." ;; esac
   cat >&2 <<'TXT'
 
   Root via Magisk (método moderno, reversível):
@@ -48,14 +49,14 @@ fb_root_magisk() {
     2) Instale o app Magisk no aparelho, abra-o e use "Instalar → Selecionar e
        corrigir um arquivo", escolhendo esse boot.img → gera magisk_patched.img.
     3) Traga o magisk_patched.img de volta e informe via PATCHED_IMG=/caminho.
-    4) Este comando faz: fastboot flash boot <magisk_patched.img>.
+    4) Este comando grava a partição definida por ROOT_PARTITION (boot ou
+       init_boot): fastboot flash <partição> <magisk_patched.img>.
 
 TXT
   local patched="${PATCHED_IMG:-}"
   if [ -z "$patched" ]; then
     if [ -n "$boot_stock" ] && [ -f "$boot_stock" ]; then
-      log_info "boot.img de estoque: $boot_stock — empurrando p/ /sdcard/Download p/ você corrigir no Magisk."
-      run_or_echo adb push "$boot_stock" /sdcard/Download/boot.img || true
+      log_info "Imagem de estoque validada localmente: $boot_stock. Copie-a para o aparelho selecionado e corrija-a no Magisk."
     fi
     die "Informe PATCHED_IMG=/caminho/magisk_patched.img (gerado pelo Magisk) e rode de novo."
   fi
@@ -63,9 +64,9 @@ TXT
   guard_verify_sha256 "$patched" "${PATCHED_SHA256:-}"
   fb_require || return 1
   # Backup do que houver antes (best-effort).
-  fb_backup_boot
+  fb_backup_boot "$partition"
   log_step "Gravando boot corrigido (Magisk)"
-  fb_run flash boot "$patched"
+  fb_run flash "$partition" "$patched"
   fb_run reboot
   log_ok "Boot corrigido gravado. Abra o Magisk e confirme o estado de root."
 }
@@ -73,13 +74,13 @@ TXT
 # Tenta salvar o boot atual (só funciona com fastbootd + partições legíveis;
 # muitos aparelhos não permitem 'fetch'). Best-effort, nunca fatal.
 fb_backup_boot() {
-  local out
-  out="$BACKUP_DIR/boot-backup-$(date +%Y%m%d-%H%M%S).img"
+  local partition="${1:-boot}" out
+  out="$BACKUP_DIR/${partition}-backup-$(date +%Y%m%d-%H%M%S).img"
   if [ "${DRY_RUN:-1}" = "1" ]; then
-    log_info "[dry-run] Tentaria salvar a partição boot em: $out"
+    log_info "[dry-run] Tentaria salvar a partição $partition em: $out"
     return 0
   fi
-  if fastboot -s "$FP_FASTBOOT_SERIAL" fetch boot "$out" >/dev/null 2>&1; then
+  if fastboot -s "$FP_FASTBOOT_SERIAL" fetch "$partition" "$out" >/dev/null 2>&1; then
     log_ok "Backup do boot atual salvo: $out"
   else
     log_warn "Não consegui fazer backup do boot via fastboot (normal em muitos aparelhos). Guarde o boot.img de fábrica manualmente."
@@ -109,14 +110,28 @@ fb_flash_factory() {
 }
 
 fb_restore_boot() {
-  local img="${BOOT_IMG:-}"
+  local img="${BOOT_IMG:-}" partition="${BOOT_PARTITION:-boot}"
+  case "$partition" in boot|init_boot) ;; *) die "BOOT_PARTITION deve ser boot ou init_boot." ;; esac
   [ -n "$img" ] || die "Informe BOOT_IMG=/caminho/boot.img (de estoque) para restaurar."
   [ -f "$img" ] || die "BOOT_IMG não existe: $img"
+  guard_verify_sha256 "$img" "${BOOT_SHA256:-}"
   fb_require || return 1
   log_step "Restaurando boot de estoque"
-  fb_run flash boot "$img"
+  fb_run flash "$partition" "$img"
   fb_run reboot
   log_ok "Boot de estoque restaurado."
+}
+
+fb_boot_recovery() {
+  local img="${RECOVERY_IMG:-}" sha="${RECOVERY_SHA256:-}"
+  [ -n "$img" ] || die "Informe RECOVERY_IMG=/caminho/recovery.img."
+  [ -f "$img" ] || die "RECOVERY_IMG não existe: $img"
+  if [ "${DRY_RUN:-1}" = 1 ]; then guard_verify_sha256 "$img" "$sha"; else guard_require_sha256 "$img" "$sha"; fi
+  fb_require || return 1
+  [ "${DRY_RUN:-1}" = 1 ] || { guard_require_expected_model; guard_require_unlocked; }
+  log_step "Inicialização temporária de recovery (não grava partição)"
+  fb_run boot "$img"
+  log_ok "Recovery enviado para boot temporário; a imagem não foi persistida."
 }
 
 # ---------------------------------------------------------------------------
@@ -155,6 +170,7 @@ driver_unlock()          { fb_unlock; }
 driver_root()            { fb_root_magisk; }
 driver_flash_firmware()  { fb_flash_factory "$@"; }
 driver_restore_boot()    { fb_restore_boot; }
+driver_boot_recovery()   { fb_boot_recovery; }
 
 # Fallback desconhecido é sempre deny-by-default. Drivers dedicados podem
 # liberar somente ações cujo protocolo esteja suficientemente definido.

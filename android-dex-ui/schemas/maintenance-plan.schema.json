@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://android-dex.local/schemas/maintenance-plan.schema.json",
+  "title": "Android-DEX maintenance plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format", "planId", "createdAt", "expiresAt", "action", "serial", "model",
+    "device", "fingerprint", "oem", "requiredConfirmation", "commitAllowed",
+    "bindings", "pathArgs", "preview"
+  ],
+  "properties": {
+    "format": {"const": "android-dex.maintenance-plan.v1"},
+    "planId": {"type": "string"},
+    "createdAt": {"type": "string", "format": "date-time"},
+    "expiresAt": {"type": "number"},
+    "action": {"enum": ["unlock", "root", "flash-firmware", "restore-boot", "boot-recovery"]},
+    "serial": {"type": "string"},
+    "model": {"type": "string"},
+    "device": {"type": "string"},
+    "fingerprint": {"type": "string"},
+    "oem": {"type": "string"},
+    "requiredConfirmation": {"enum": ["SIM", "KNOX PERMANENTE"]},
+    "commitAllowed": {"type": "boolean"},
+    "bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "size": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "pathArgs": {"type": "array", "items": {"type": "string"}},
+    "preview": {"type": "string"}
+  }
+}

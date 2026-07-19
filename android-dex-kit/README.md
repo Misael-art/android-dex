@@ -77,6 +77,7 @@ android-dex --device PHONE-A # escolhe o serial sem ambiguidade
 android-dex --once       # roda uma sessão sem ficar reconectando
 android-dex --status     # mostra estado, dispositivos e sessão ativa
 android-dex --stop       # encerra a sessão atual
+android-dex-doctor       # relatório somente leitura de host/capacidades
 android-dex --restore-tweaks --device PHONE-A # restaura ajustes globais salvos
 android-dex 192.168.1.50 # usa ADB_TCP_PORT (5555 por padrão)
 android-dex-connect --from-usb --port 43210 # escolhe outra porta adb tcpip
@@ -152,6 +153,10 @@ do processo inteiro.
 Veja o estado com `android-dex --status` e os logs em
 `~/.local/state/android-dex/android-dex.log`.
 
+`android-dex-doctor [--device SERIAL]` verifica adb/scrcpy, autorização USB,
+perfil OEM, SDK, display secundário e endpoints mDNS sem modificar o aparelho.
+Ele é o roteiro reproduzível para validar novos modelos na matriz de hardware.
+
 Para investigar uma falha normalmente não fatal, rode uma sessão com
 `ADX_DEBUG=1 android-dex --once`. O log mostrará o comando e o código de saída,
 sem transformar a falha em queda do supervisor.
@@ -171,16 +176,41 @@ quando a descoberta não é única ou não está disponível.
 ./uninstall.sh --purge    # remove também config, logs e a regra udev
 ```
 
-## Adaptação para Windows
+## Windows 10/11 (PowerShell)
 
-No Windows a lógica de supervisão é a mesma; muda a integração com o host. O
-caminho direto é traduzir o `android-dex` para PowerShell (mesmo laço de
-resolução de dispositivo + `Start-Process scrcpy ... ; Wait-Process` + *backoff*),
-usar os binários `scrcpy`/`adb` do pacote oficial no `PATH`, criar um atalho
-`.lnk` (com os mesmos argumentos das ações do `.desktop`) e, para auto-start,
-registrar uma Tarefa Agendada no logon em vez do serviço systemd. O
-`config.env` vira um `config.ps1` com as mesmas variáveis. Se quiser, peço para
-gerar essa versão.
+A porta em [`windows/`](windows/) implementa seleção segura, modo automático,
+snapshot/restauração de tweaks, lock por mutex, estado validado, fallback para
+mirror e reconexão com backoff. Com `adb.exe` e `scrcpy.exe` no `PATH`:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\windows\install.ps1                 # instala e cria atalho no Desktop
+.\windows\install.ps1 -EnableStartup  # também cria Tarefa Agendada no logon
+
+& "$env:LOCALAPPDATA\AndroidDex\android-dex.ps1" -Command list
+& "$env:LOCALAPPDATA\AndroidDex\android-dex.ps1" -Device PHONE-A -Once
+& "$env:LOCALAPPDATA\AndroidDex\android-dex.ps1" -Command stop
+```
+
+Configuração: `$env:APPDATA\AndroidDex\config.ps1`. A CI valida todos os
+scripts com o parser do Windows PowerShell 5.1 e executa um smoke test de
+listagem no `windows-latest`.
+
+## Integração legível por máquina
+
+A interface Qt e outras automações podem consultar o kit sem analisar texto
+humano. Os logs continuam em `stderr`; o documento JSON único fica em
+`stdout`.
+
+```bash
+android-dex --json --non-interactive --list
+android-dex --json --status
+android-dex --json --device SERIAL --once
+```
+
+O envelope usa `format: "android-dex.machine.v1"`. `--non-interactive` força
+uma sessão única e desliga a reconexão; ele não escolhe silenciosamente entre
+múltiplos aparelhos e não altera os guard rails existentes.
 
 ---
 

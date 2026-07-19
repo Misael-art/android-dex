@@ -135,7 +135,8 @@ verify_firmware_descriptor() {
 
   if [ "$format" = android-dex-firmware-v2 ]; then
     [ -n "$security_patch" ] || die "Manifesto v2 exige security_patch=AAAA-MM-DD."
-    [ -n "$plan" ] && [ -n "$plan_sha256" ] || die "Manifesto v2 exige plan e plan_sha256."
+    [ -n "$plan" ] || die "Manifesto v2 exige plan e plan_sha256."
+    [ -n "$plan_sha256" ] || die "Manifesto v2 exige plan e plan_sha256."
     verify_firmware_plan "$bundle" "$plan" "$plan_sha256"
   elif [ -z "$security_patch" ] && [ -z "$rollback_index" ]; then
     log_warn "Manifesto v1 não declara dados anti-rollback; elegível apenas para validação guiada."

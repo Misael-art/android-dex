@@ -99,12 +99,12 @@ jobs:
       - name: Smoke AppImage on Ubuntu container
         run: |
           docker run --rm -v "$PWD:/work" -w /work ubuntu:24.04 bash -lc '
-            apt-get update && apt-get install -y libegl1 &&
+            apt-get update && apt-get install -y libegl1 libgl1 &&
             bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-ubuntu.png'
       - name: Smoke AppImage on Fedora container
         run: |
           docker run --rm -v "$PWD:/work" -w /work fedora:43 bash -lc '
-            dnf install -y mesa-libEGL file &&
+            dnf install -y mesa-libEGL mesa-libGL file &&
             bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-fedora.png'
       - name: Smoke AppImage on Arch container
         run: |

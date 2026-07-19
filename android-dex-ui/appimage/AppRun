@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+exec "$APPDIR/usr/lib/android-dex/android-dex-ui" "$@"

@@ -5,7 +5,8 @@
 <br>
 
 **Transforme um Android conectado em um desktop no Linux — e cuide do aparelho de ponta a ponta.**
-Dois toolkits irmãos, em shell puro, sobre as ferramentas oficiais (`scrcpy`, `adb`, `fastboot`, `heimdall`, `Magisk`).
+Uma aplicação Qt/QML e dois toolkits irmãos sobre as ferramentas oficiais
+(`scrcpy`, `adb`, `fastboot`, `heimdall`, `Magisk`).
 
 <br>
 
@@ -22,10 +23,13 @@ Dois toolkits irmãos, em shell puro, sobre as ferramentas oficiais (`scrcpy`, `
 
 ## ✨ O que é isto?
 
-Um workspace com **dois projetos que compartilham a mesma fundação** (`lib/common.sh`: logging com rotação, diretórios XDG, backoff exponencial e helpers de ADB):
+Um workspace com **três camadas deliberadamente separadas**. A interface nunca
+executa comandos livres: ela conversa com um serviço local, que delega apenas
+operações allowlisted aos toolkits existentes.
 
 | Projeto | O que faz | Risco | Root? |
 | :-- | :-- | :--: | :--: |
+| ✨ **[android-dex-ui](android-dex-ui/)** | Aplicação nativa PySide6/Qt Quick, sessões DeX, Wi‑Fi, diagnóstico e manutenção guiada. | 🟢/🟠 isolado por fluxo | ❌ não |
 | 🖥️ **[android-dex-kit](android-dex-kit/)** | Experiência **desktop/DeX** via `scrcpy + ADB`, com modo automático, perfis OEM, supervisor resiliente, systemd e udev. | 🟢 baixo | ❌ não |
 | 🔧 **[android-dex-flash](android-dex-flash/)** | Diagnóstico e manutenção guiada, com bundles não executáveis e descritores assinados; gravações sem validação permanecem bloqueadas. | 🔴 alto | ⚠️ opcional |
 
@@ -37,6 +41,7 @@ Um workspace com **dois projetos que compartilham a mesma fundação** (`lib/com
 ## 🧭 Índice
 
 - [Arquitetura](#-arquitetura)
+- [Interface Qt/QML](#-interface-qtqml)
 - [android-dex — desktop sem root](#️-android-dex--desktop-sem-root)
 - [android-dex-flash — manutenção do aparelho](#-android-dex-flash--manutenção-do-aparelho)
 - [Compatibilidade por marca](#-compatibilidade-por-marca)
@@ -50,6 +55,8 @@ Um workspace com **dois projetos que compartilham a mesma fundação** (`lib/com
 
 ```mermaid
 flowchart TD
+    UI["android-dex-ui<br/><i>PySide6 + Qt Quick/QML</i>"]
+    D["android-dexd<br/><i>JSON-RPC · socket 0600 · UID</i>"]
     C["lib/common.sh<br/><i>fundação compartilhada</i><br/>log · XDG · backoff · ADB helpers"]
 
     subgraph KIT["🖥️ android-dex-kit  ·  sem root"]
@@ -69,13 +76,42 @@ flowchart TD
       B0 --> B1 --> B2
     end
 
+    UI -->|"core.sock"| D
+    D -->|"argv allowlisted"| KIT
+    D -->|"plano vinculado + confirmação"| FLASH
     C --> KIT
     C --> FLASH
 
     style C fill:#12233c,stroke:#3ddc84,color:#dbe6f5
+    style UI fill:#0e1b2f,stroke:#13bdf2,color:#dbe6f5
+    style D fill:#12233c,stroke:#59d35d,color:#dbe6f5
     style KIT fill:#0e1b2f,stroke:#3ddc84,color:#dbe6f5
     style FLASH fill:#0e1b2f,stroke:#4f8cff,color:#dbe6f5
 ```
+
+---
+
+## ✨ Interface Qt/QML
+
+A experiência começa pelo modo desktop. Firmware e bootloader ficam em
+**Manutenção avançada**, depois de um divisor e com linguagem visual âmbar.
+
+```bash
+cd android-dex-ui
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+
+android-dex-ui          # uso real; inicia android-dexd quando necessário
+android-dex-ui --demo   # aparelho fictício, não chama adb/scrcpy/fastboot
+android-dex-setup       # verifica dependências externas
+```
+
+O daemon por usuário continua supervisionando a sessão quando a janela fecha.
+O transporte Linux usa `$XDG_RUNTIME_DIR/android-dex/core.sock`; diretório e
+socket são privados (`0700`/`0600`) e o UID do cliente é verificado.
+
+👉 Instalação, contrato e testes em **[android-dex-ui/README.md](android-dex-ui/README.md)**.
 
 ---
 
@@ -186,11 +222,20 @@ ação destrutiva
 
 A ferramenta é **honesta sobre o que não faz**: não burla espera de unlock, não desbloqueia aparelhos travados pelo fabricante e não restaura Knox/Play Integrity perdidos.
 
+Na interface, um plano destrutivo expira em 10 minutos e vincula serial,
+modelo, fingerprint, OEM, ação, caminhos canônicos, tamanhos e SHA-256. No
+`apply`, serviço e script repetem identidade, política do driver, bateria e
+hashes. `KNOX PERMANENTE` é exigido para Samsung; as demais confirmações usam
+`SIM`. A frase digitada nunca é persistida nem incluída nos logs.
+
 ---
 
 ## 🗺️ Roadmap
 
-Plano completo em **[ROADMAP.md](ROADMAP.md)** — 10 melhorias do kit (ordenadas por impacto) e as fases 0→4 do flash. Destaques:
+Plano histórico em **[ROADMAP.md](ROADMAP.md)**. A UI Qt/QML, o contrato
+`android-dex.machine.v1`, o daemon privado e a automação de AppImage já estão
+implementados nesta branch; a matriz física multi-OEM permanece uma atividade
+de validação de hardware, sem ampliar os drivers que aceitam `--commit`.
 
 - **A1** — regra udev por *vendor id* (compatibilidade plug-and-play entre marcas)
 - **A3 / A4** — perfis por dispositivo + detecção automática de `dex` vs `mirror`

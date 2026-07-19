@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "android-dex-ui"
+version = "0.1.0"
+description = "Interface Qt/QML segura para Android-DEX"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = ["PySide6-Essentials>=6.8"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+android-dex-ui = "android_dex_ui.main:main"
+android-dexd = "android_dex_ui.service:main"
+android-dex-setup = "android_dex_ui.setup_assistant:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+android_dex_ui = [
+  "qml/*.qml",
+  "assets/fonts/*.ttf",
+  "assets/fonts/*.txt",
+  "assets/images/*.png",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

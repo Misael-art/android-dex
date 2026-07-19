@@ -44,3 +44,71 @@ jobs:
           $env:APPDATA = Join-Path $env:RUNNER_TEMP 'roaming'
           $output = & powershell -NoProfile -ExecutionPolicy Bypass -File android-dex-kit/windows/android-dex.ps1 -Command list | Out-String
           if ($LASTEXITCODE -ne 0 -or $output -notmatch 'PHONE-A' -or $output -notmatch 'Pixel_8_Pro') { throw "Windows smoke test failed: $output" }
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: android-dex-ui/pyproject.toml
+      - name: Install Qt test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-declarative-dev-tools libegl1
+      - name: Install UI and tests
+        run: python -m pip install -e './android-dex-ui[test]'
+      - name: Contract and service tests
+        run: make ui-test
+      - name: Qt Quick keyboard and dialog tests
+        run: make qml-test
+      - name: Render all supported UI states
+        run: make ui-smoke
+
+  appimage:
+    runs-on: ubuntu-latest
+    needs: [shell, ui]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: android-dex-ui/pyproject.toml
+      - name: Install AppImage runtime libraries
+        run: sudo apt-get update && sudo apt-get install -y libegl1
+      - name: Fetch official appimagetool
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimagetool"
+          chmod 0755 "$RUNNER_TEMP/appimagetool"
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          APPIMAGETOOL_BIN: ${{ runner.temp }}/appimagetool
+        run: make appimage
+      - name: Smoke AppImage offscreen
+        run: bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage
+      - name: Smoke AppImage on Ubuntu container
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work ubuntu:24.04 bash -lc '
+            apt-get update && apt-get install -y libegl1 &&
+            bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-ubuntu.png'
+      - name: Smoke AppImage on Fedora container
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work fedora:43 bash -lc '
+            dnf install -y mesa-libEGL file &&
+            bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-fedora.png'
+      - name: Smoke AppImage on Arch container
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc '
+            pacman -Sy --noconfirm libglvnd file &&
+            bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-arch.png'
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Android-DEX-x86_64.AppImage
+          path: android-dex-ui/build/Android-DEX-x86_64.AppImage
+          if-no-files-found: error

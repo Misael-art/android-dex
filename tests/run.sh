@@ -612,6 +612,30 @@ test_backoff_grows_after_fast_failures() {
   [ -n "$d1" ] && [ -n "$d2" ] && [ "$d2" -ge "$d1" ]
 }
 
+test_machine_readable_cli_contracts() {
+  local dir dex_json flash_json
+  dir="$(new_case machine-json)"; write_dex_config "$dir"
+  printf 'PHONE-A\tdevice product:husky model:Pixel_8_Pro device:husky\n' > "$dir/adb.devices"
+  dex_json="$dir/dex.json"
+  run_dex "$dir" --json --non-interactive --list >"$dex_json" 2>"$dir/dex.err" || return 1
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["format"]=="android-dex.machine.v1" and v["devices"][0]["serial"]=="PHONE-A" and v["devices"][0]["authorized"] is True' "$dex_json" || return 1
+
+  flash_json="$dir/flash.json"
+  run_flash "$dir" pixel --json --non-interactive info >"$flash_json" 2>"$dir/flash.err" || return 1
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["success"] is True and v["command"]=="info" and isinstance(v["commitActions"],list)' "$flash_json"
+}
+
+test_machine_mode_never_bypasses_confirmation() {
+  local dir output
+  dir="$(new_case machine-confirm)"
+  printf 'PHONE-A\tdevice\n' > "$dir/adb.devices"
+  output="$dir/result.json"
+  if run_flash "$dir" pixel --json --non-interactive --commit unlock >"$output" 2>"$dir/result.err"; then
+    return 1
+  fi
+  python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["success"] is False and v["error"]["code"]=="E-CLI-FAILED"' "$output"
+}
+
 run_test() {
   local name="$1"; shift
   if "$@"; then
@@ -641,6 +665,8 @@ run_test "tweaks restauram exatamente o estado anterior" test_tweaks_restore_exa
 run_test "ADX_DEBUG registra falhas não fatais" test_debug_reports_nonfatal_failures
 run_test "instância única e --stop encerram supervisor" test_single_instance_and_stop_supervisor
 run_test "backoff cresce após quedas rápidas" test_backoff_grows_after_fast_failures
+run_test "CLIs oferecem JSON estrito" test_machine_readable_cli_contracts
+run_test "modo não interativo não ignora confirmação" test_machine_mode_never_bypasses_confirmation
 
 printf '\n%s passed; %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -196,6 +196,22 @@ Configuração: `$env:APPDATA\AndroidDex\config.ps1`. A CI valida todos os
 scripts com o parser do Windows PowerShell 5.1 e executa um smoke test de
 listagem no `windows-latest`.
 
+## Integração legível por máquina
+
+A interface Qt e outras automações podem consultar o kit sem analisar texto
+humano. Os logs continuam em `stderr`; o documento JSON único fica em
+`stdout`.
+
+```bash
+android-dex --json --non-interactive --list
+android-dex --json --status
+android-dex --json --device SERIAL --once
+```
+
+O envelope usa `format: "android-dex.machine.v1"`. `--non-interactive` força
+uma sessão única e desliga a reconexão; ele não escolhe silenciosamente entre
+múltiplos aparelhos e não altera os guard rails existentes.
+
 ---
 
 Construído sobre [scrcpy](https://github.com/Genymobile/scrcpy) (Genymobile).

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://android-dex.local/schemas/event.schema.json",
+  "title": "Android-DEX event",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["event", "jobId", "correlationId", "timestamp"],
+  "properties": {
+    "event": {
+      "enum": ["device.changed", "session.changed", "job.progress", "job.completed", "job.failed"]
+    },
+    "jobId": {"type": "string", "minLength": 1},
+    "correlationId": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"}
+  }
+}

@@ -165,6 +165,21 @@ inconclusivo permanece sem permissão de gravação automática.
 ./uninstall.sh --purge    # remove também config, logs e backups
 ```
 
+## Integração legível por máquina
+
+`--json` reserva `stdout` para um único documento no formato
+`android-dex.machine.v1`; avisos, roteiro e logs humanos seguem em `stderr`.
+
+```bash
+android-dex-flash --json --non-interactive info
+android-dex-flash --json --non-interactive caps
+android-dex-flash --json --non-interactive check-rollback DIRETORIO
+```
+
+O modo não interativo **não autoriza gravação**. A combinação
+`--non-interactive --commit` é recusada; o serviço usa um plano temporário e
+fornece a confirmação explícita ao script somente no momento do `apply`.
+
 ---
 
 Orquestra: [fastboot/adb](https://developer.android.com/tools/releases/platform-tools)

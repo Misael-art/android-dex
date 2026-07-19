@@ -12,7 +12,7 @@ Button {
     padding: 16
     leftPadding: 18
     rightPadding: 18
-    focusPolicy: Qt.StrongFocus
+    activeFocusOnTab: true
     Keys.onReturnPressed: function(event) { control.clicked(); event.accepted = true }
     Keys.onEnterPressed: function(event) { control.clicked(); event.accepted = true }
 

@@ -6,7 +6,7 @@ ComboBox {
     property color accent: Theme.cyan
 
     implicitHeight: 50
-    focusPolicy: Qt.StrongFocus
+    activeFocusOnTab: true
     Accessible.name: displayText
 
     contentItem: Text {

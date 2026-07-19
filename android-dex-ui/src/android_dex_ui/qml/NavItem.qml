@@ -10,7 +10,7 @@ Button {
     implicitHeight: 52
     leftPadding: 18
     rightPadding: 14
-    focusPolicy: Qt.StrongFocus
+    activeFocusOnTab: true
     Accessible.name: text
     Keys.onReturnPressed: function(event) { control.clicked(); event.accepted = true }
     Keys.onEnterPressed: function(event) { control.clicked(); event.accepted = true }

@@ -11,7 +11,7 @@ TextField {
     font.family: "Inter"
     font.pixelSize: 13
     selectByMouse: true
-    focusPolicy: Qt.StrongFocus
+    activeFocusOnTab: true
     background: Rectangle {
         radius: 9
         color: Theme.raised

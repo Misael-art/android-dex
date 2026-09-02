@@ -12,6 +12,10 @@ versionamento [SemVer](https://semver.org/lang/pt-BR/).
   localmente, como já faz o instalador do kit. A instalação do android-dex-flash
   volta a concluir (binário, libs, drivers, firmware e `flash.env`).
 
+### Alterado
+- `android-dex-ui` alinhado para **0.1.1** (`pyproject.toml` e `__version__`), para
+  o wheel/sdist da release baterem com a tag. Conteúdo da UI inalterado.
+
 ## [0.1.0] — 2026-07-19
 
 Primeira release pública do workspace **Android-DEX** (três componentes que

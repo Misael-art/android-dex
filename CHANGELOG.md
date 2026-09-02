@@ -3,6 +3,15 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.1.1] — 2026-09-02
+
+### Corrigido
+- `android-dex-flash/install.sh` abortava com `ADXF_CONFIG_DIR: variável não
+  associada` (sob `set -u`): o instalador referenciava variáveis definidas apenas
+  em `flash-common.sh`, que ele não carrega. Agora define os caminhos de config
+  localmente, como já faz o instalador do kit. A instalação do android-dex-flash
+  volta a concluir (binário, libs, drivers, firmware e `flash.env`).
+
 ## [0.1.0] — 2026-07-19
 
 Primeira release pública do workspace **Android-DEX** (três componentes que
@@ -44,4 +53,5 @@ compartilham `lib/common.sh`).
 - Workflow de release por tag e artefatos versionados (AppImage, tarballs,
   wheel/sdist, `SHA256SUMS`).
 
+[0.1.1]: https://github.com/Misael-art/android-dex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Misael-art/android-dex/releases/tag/v0.1.0

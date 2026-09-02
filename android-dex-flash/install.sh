@@ -18,6 +18,11 @@ set -uo pipefail
 SRC_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 . "$SRC_DIR/lib/common.sh"
 
+# Config do flash (o install.sh não carrega flash-common.sh, então define aqui
+# os mesmos caminhos que flash-common.sh usa em runtime).
+ADXF_CONFIG_DIR="$XDG_CONFIG_HOME/android-dex-flash"
+ADXF_CONFIG_FILE="$ADXF_CONFIG_DIR/flash.env"
+
 NO_DEPS=0
 WITH_HEIMDALL=0
 for a in "$@"; do

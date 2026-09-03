@@ -60,22 +60,17 @@ if [ "$secondary" = true ]; then check_ok 'feature de activities_on_secondary_di
 if [ "$profile" = samsung ] || [ "$secondary" = true ] || [ "$freeform" = 1 ]; then check_ok 'há sinal de capacidade desktop'; else check_warn 'DeX não confirmado; mirror é a escolha estável'; fi
 
 printf '\nControle e modo desktop:\n'
-control="$(adx_secure_settings_state "$serial")"
 case "$profile" in
   xiaomi)
-    if [ "$control" = yes ]; then
-      check_ok "Xiaomi: 'Depuração USB (Configurações de segurança)' concedida — freeform e controle liberados"
-    else
-      check_warn "Xiaomi/HyperOS: ligue 'Depuração USB (Configurações de segurança)' + REINICIE, senão o DeX fica PRETO e sem controle (use --mirror enquanto isso)"
-    fi ;;
+    printf '  [INFO]  Xiaomi/HyperOS: o modo desktop (DeX) exige "Depuração USB (Configurações de\n'
+    printf '          segurança)" ligada + REINICIAR (pede conta Mi + internet). Sem isso o display\n'
+    printf '          virtual fica preto/sem controle. Ao iniciar, o android-dex testa isso de fato\n'
+    printf '          e cai para mirror automaticamente se estiver bloqueado.\n' ;;
   samsung)
-    check_ok "Samsung: o DeX nativo aparece sozinho no display virtual" ;;
+    check_ok 'Samsung: o DeX nativo aparece sozinho no display virtual' ;;
   *)
-    case "$control" in
-      yes) check_ok 'shell adb tem WRITE_SECURE_SETTINGS (freeform e controle ok)' ;;
-      no)  check_warn 'shell adb sem WRITE_SECURE_SETTINGS; controle/freeform podem falhar — habilite a depuração de segurança do fabricante' ;;
-      *)   : ;;
-    esac ;;
+    printf '  [INFO]  se o desktop vier preto/sem controle, habilite a depuração de segurança do\n'
+    printf '          fabricante (ou use "android-dex --mirror").\n' ;;
 esac
 
 printf '\nConectividade:\n'

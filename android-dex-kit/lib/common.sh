@@ -318,11 +318,15 @@ adb_discover_connect_endpoint() {
 # Ecoa: yes | no | unknown
 adx_secure_settings_state() {
   local s="$1" out
-  out="$(adb -s "$s" shell dumpsys package com.android.shell 2>/dev/null | tr -d '\r')"
-  [ -n "$out" ] || { echo unknown; return 0; }
+  # Teste FUNCIONAL e auto-reversível: o MIUI/HyperOS pode reportar a permissão
+  # como "granted=true" no dumpsys mas ainda NEGÁ-LA na prática. Gravar uma chave
+  # descartável em 'settings global' exige WRITE_SECURE_SETTINGS de verdade; em
+  # seguida a removemos (efeito líquido nulo). Se a gravação falhar, nada foi
+  # criado. É por isso o único sinal confiável do portão de segurança.
+  out="$(adb -s "$s" shell 'settings put global adx_secure_probe 1 2>&1; settings delete global adx_secure_probe >/dev/null 2>&1' 2>&1 | tr -d '\r')"
   case "$out" in
-    *"WRITE_SECURE_SETTINGS: granted=true"*)  echo yes ;;
-    *"WRITE_SECURE_SETTINGS: granted=false"*) echo no ;;
+    '') echo yes ;;
+    *SecurityException*|*"Permission den"*|*WRITE_SECURE_SETTINGS*) echo no ;;
     *) echo unknown ;;
   esac
 }

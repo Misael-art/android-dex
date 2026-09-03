@@ -46,8 +46,7 @@ PROFILE_KEY="generic"
 PROFILE_LOADED=0
 AUTO_MODE_SELECTED=0
 AUTO_DEX_FALLBACK_USED=0
-FREEFORM_EFFECTIVE=1       # 0 se os tweaks de freeform não "pegaram" no aparelho
-CONTROL_STATE="unknown"    # yes|no|unknown — WRITE_SECURE_SETTINGS / INJECT_EVENTS
+CONTROL_STATE="unknown"    # yes|no|unknown — freeform/INJECT_EVENTS liberados ao adb?
 SESSION_TOKEN=""
 SESSION_LOCK_HELD=0
 SUPERVISOR_STATE_FILE="$ADX_STATE_DIR/supervisor.state"
@@ -401,26 +400,27 @@ resolve_start_app() {
 
 # Confere se o tweak de freeform realmente aplicou (settings put costuma ser
 # bloqueado no HyperOS sem a permissão de segurança).
-verify_freeform_effective() {
+# Descobre, de forma CONFIÁVEL, se o aparelho deixa o adb ativar o desktop
+# (freeform) e injetar eventos (controle). Prioriza a verdade FUNCIONAL: se os
+# tweaks de freeform foram aplicados, basta reler; senão, faz o teste funcional.
+detect_control_state() {
   local s="$1" v
-  FREEFORM_EFFECTIVE=1
-  [ "$MODE" = dex ] || return 0
-  [ "$TWEAKS_APPLIED" = 1 ] || return 0
-  v="$(adb -s "$s" shell settings get global enable_freeform_support 2>/dev/null | tr -d '\r')"
-  [ "$v" = 1 ] && FREEFORM_EFFECTIVE=1 || FREEFORM_EFFECTIVE=0
+  if [ "$MODE" = dex ] && [ "$ENABLE_FREEFORM_TWEAKS" = 1 ] && [ "$TWEAKS_APPLIED" = 1 ]; then
+    v="$(adb -s "$s" shell settings get global enable_freeform_support 2>/dev/null | tr -d '\r')"
+    [ "$v" = 1 ] && CONTROL_STATE=yes || CONTROL_STATE=no
+  else
+    CONTROL_STATE="$(adx_secure_settings_state "$s")"
+  fi
 }
 
-# Aviso claro e específico por marca antes de subir a sessão.
-session_advisory() {
-  local s="$1"
-  CONTROL_STATE="$(adx_secure_settings_state "$s")"
-  [ "$MODE" = dex ] || return 0
-  if [ "$PROFILE_KEY" = xiaomi ] && [ "$CONTROL_STATE" != yes ]; then
-    log_warn "Xiaomi/HyperOS: sem 'Depuração USB (Configurações de segurança)', o modo desktop fica PRETO e SEM controle."
+# Aviso claro e específico por marca quando o desktop não é viável.
+advise_desktop_blocked() {
+  if [ "$PROFILE_KEY" = xiaomi ]; then
+    log_warn "Xiaomi/HyperOS: o modo desktop está BLOQUEADO — o sistema nega freeform e controle ao adb."
     log_warn "  Ligue em: Opções do desenvolvedor → 'Depuração USB (Configurações de segurança)' (pede conta Mi + internet) e REINICIE o aparelho."
-    log_warn "  Alternativa imediata: 'android-dex --mirror' (espelha a tela real; sempre funciona)."
-  elif [ "$CONTROL_STATE" = no ] && [ "$PROFILE_KEY" != samsung ]; then
-    log_warn "O shell adb não tem permissão de 'secure settings' — controle e freeform podem falhar (habilite a depuração de segurança do fabricante)."
+    log_warn "  Enquanto isso, 'android-dex --mirror' espelha a tela real e sempre funciona."
+  else
+    log_warn "O aparelho negou freeform/controle ao adb; habilite a depuração de segurança do fabricante, senão o desktop fica preto/sem controle."
   fi
 }
 
@@ -428,20 +428,18 @@ session_advisory() {
 # caindo para mirror ANTES de mostrar um display virtual inutilizável.
 prepare_desktop_session() {
   local s="$1"
-  session_advisory "$s"
   [ "$MODE" = dex ] || return 0
   resolve_start_app "$s"
-  verify_freeform_effective "$s"
-  if [ "$AUTO_MODE_SELECTED" = 1 ] && [ "$AUTO_DEX_FALLBACK_USED" = 0 ] && \
-     { [ "$FREEFORM_EFFECTIVE" = 0 ] || [ "$CONTROL_STATE" = no ]; }; then
+  detect_control_state "$s"
+  [ "$CONTROL_STATE" = no ] || return 0
+  advise_desktop_blocked
+  if [ "$AUTO_MODE_SELECTED" = 1 ] && [ "$AUTO_DEX_FALLBACK_USED" = 0 ]; then
     AUTO_DEX_FALLBACK_USED=1
-    log_warn "Modo automático: desktop virtual não é viável agora (freeform/controle bloqueados). Usando mirror para não abrir uma tela preta."
+    log_warn "Modo automático: usando mirror para você ver a tela em vez de um display virtual preto."
     [ "$TWEAKS_APPLIED" = 1 ] && { restore_desktop_tweaks "$s" 1 || true; }
     MODE="mirror"
-    return 0
-  fi
-  if [ "$MODE" = dex ] && [ -z "$START_APP" ] && [ "$CONTROL_STATE" = no ]; then
-    log_warn "Sem app inicial e sem controle: o display virtual pode ficar preto. Defina START_APP no config ou ligue a permissão de segurança."
+  else
+    log_warn "Modo DeX forçado (--dex): a janela pode abrir preta e sem controle até habilitar a permissão acima."
   fi
 }
 

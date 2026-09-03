@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-dex-ui"
-version = "0.1.1"
+version = "0.1.2"
 description = "Interface Qt/QML segura para Android-DEX"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -3,6 +3,29 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.1.2] — 2026-09-02
+
+### android-dex-kit — experiência do modo desktop (DeX)
+- **Fim da "tela preta" silenciosa.** No MIUI/HyperOS o modo desktop depende de
+  freeform (`settings put`) e controle (`INJECT_EVENTS`), ambos bloqueados até
+  ligar **"Depuração USB (Configurações de segurança)"** + reiniciar. Antes o DeX
+  abria um display virtual preto e sem controle, sem explicação.
+  - Detecção **funcional e auto-reversível** do portão de segurança
+    (`adx_secure_settings_state` grava/remove uma chave descartável — o `dumpsys`
+    reporta a permissão como concedida mesmo quando o sistema ainda a nega).
+  - **Aviso específico por marca** ao iniciar, dizendo o porquê e como resolver.
+  - **Fallback automático para mirror** quando o desktop não é viável (mostra a
+    tela real em vez de um display preto). `START_APP` cai para o home padrão.
+- **`android-dex-doctor`**: nova seção "Controle e modo desktop" (somente leitura)
+  com o requisito por marca.
+- **`android-dex-connect` (Wi-Fi)**: distingue claramente o endereço de
+  **EMPARELHAMENTO** (temporário) do de **CONEXÃO** (persistente) e termina com um
+  resumo de próximos passos (`android-dex --wifi`).
+
+### Geral
+- `android-dex-ui` alinhado para 0.1.2 (conteúdo inalterado; mantém os artefatos
+  da release na mesma versão).
+
 ## [0.1.1] — 2026-09-02
 
 ### Corrigido
@@ -57,5 +80,6 @@ compartilham `lib/common.sh`).
 - Workflow de release por tag e artefatos versionados (AppImage, tarballs,
   wheel/sdist, `SHA256SUMS`).
 
+[0.1.2]: https://github.com/Misael-art/android-dex/releases/tag/v0.1.2
 [0.1.1]: https://github.com/Misael-art/android-dex/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Misael-art/android-dex/releases/tag/v0.1.0

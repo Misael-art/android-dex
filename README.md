@@ -256,7 +256,11 @@ android-dex-flash flash-firmware DIR # roteiro guiado; não executa scripts
 | Samsung One UI 8 / Android 15+ | 🟢 DeX nativo no display virtual | funciona direto |
 | Pixel / AOSP 15+ | 🟡 desktop mode (às vezes exige tela física) | `START_APP` |
 | Xiaomi / Oppo / Motorola | 🟡 abre vazio, precisa de launcher | `START_APP` + `VD_SYSTEM_DECORATIONS=0` |
+| Xiaomi/POCO (HyperOS) | ⚠️ DeX exige **"Depuração USB (Configurações de segurança)"** + reboot | senão o app avisa e cai para mirror |
 | Qualquer aparelho | 🟢 `MODE="mirror"` | sempre funciona |
+
+> [!NOTE]
+> Quando o modo desktop **não é viável** (ex.: HyperOS sem a permissão de segurança, freeform bloqueado), o `android-dex` **avisa o motivo e usa mirror** em vez de abrir uma tela preta. Rode `android-dex-doctor` para ver o estado de controle/desktop do seu aparelho.
 
 **Manutenção (`android-dex-flash`):**
 

@@ -59,6 +59,25 @@ if [[ "$sdk" =~ ^[0-9]+$ ]] && [ "$sdk" -ge "$AUTO_DEX_MIN_SDK" ]; then check_ok
 if [ "$secondary" = true ]; then check_ok 'feature de activities_on_secondary_displays presente'; else check_warn 'feature de display secundário não confirmada'; fi
 if [ "$profile" = samsung ] || [ "$secondary" = true ] || [ "$freeform" = 1 ]; then check_ok 'há sinal de capacidade desktop'; else check_warn 'DeX não confirmado; mirror é a escolha estável'; fi
 
+printf '\nControle e modo desktop:\n'
+control="$(adx_secure_settings_state "$serial")"
+case "$profile" in
+  xiaomi)
+    if [ "$control" = yes ]; then
+      check_ok "Xiaomi: 'Depuração USB (Configurações de segurança)' concedida — freeform e controle liberados"
+    else
+      check_warn "Xiaomi/HyperOS: ligue 'Depuração USB (Configurações de segurança)' + REINICIE, senão o DeX fica PRETO e sem controle (use --mirror enquanto isso)"
+    fi ;;
+  samsung)
+    check_ok "Samsung: o DeX nativo aparece sozinho no display virtual" ;;
+  *)
+    case "$control" in
+      yes) check_ok 'shell adb tem WRITE_SECURE_SETTINGS (freeform e controle ok)' ;;
+      no)  check_warn 'shell adb sem WRITE_SECURE_SETTINGS; controle/freeform podem falhar — habilite a depuração de segurança do fabricante' ;;
+      *)   : ;;
+    esac ;;
+esac
+
 printf '\nConectividade:\n'
 if adx_is_tcp_serial "$serial"; then check_ok "ADB Wi-Fi online em $serial"; else check_ok "ADB USB autorizado em $serial"; fi
 mdns_count="$(adb_mdns_connect_endpoints | wc -l | tr -d ' ')"

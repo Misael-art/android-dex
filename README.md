@@ -10,6 +10,7 @@ Uma aplicação Qt/QML e dois toolkits irmãos sobre as ferramentas oficiais
 
 <br>
 
+[![Release](https://img.shields.io/github/v/release/Misael-art/android-dex?color=3ddc84&label=release)](https://github.com/Misael-art/android-dex/releases/latest)
 ![License](https://img.shields.io/badge/license-MIT-3ddc84)
 ![Shell](https://img.shields.io/badge/shell-bash-4EAA25?logo=gnubash&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Linux-333?logo=linux&logoColor=white)
@@ -41,6 +42,7 @@ operações allowlisted aos toolkits existentes.
 ## 🧭 Índice
 
 - [Arquitetura](#-arquitetura)
+- [Instalação e releases](#-instalação-e-releases)
 - [Interface Qt/QML](#-interface-qtqml)
 - [android-dex — desktop sem root](#️-android-dex--desktop-sem-root)
 - [android-dex-flash — manutenção do aparelho](#-android-dex-flash--manutenção-do-aparelho)
@@ -88,6 +90,70 @@ flowchart TD
     style KIT fill:#0e1b2f,stroke:#3ddc84,color:#dbe6f5
     style FLASH fill:#0e1b2f,stroke:#4f8cff,color:#dbe6f5
 ```
+
+---
+
+## 📦 Instalação e releases
+
+Duas formas: baixar os artefatos prontos da **[Release](https://github.com/Misael-art/android-dex/releases/latest)**
+(recomendado para usar) ou instalar a partir do **código-fonte** (para desenvolver).
+Todos os artefatos da release têm checksums em `SHA256SUMS`.
+
+### A) A partir da release (recomendado)
+
+Baixe da página de [Releases](https://github.com/Misael-art/android-dex/releases/latest)
+ou com a `gh` CLI:
+
+```bash
+# Interface — AppImage autossuficiente (Qt + Python embutidos)
+gh release download -R Misael-art/android-dex -p 'Android-DEX-*.AppImage'
+chmod +x Android-DEX-x86_64.AppImage
+./Android-DEX-x86_64.AppImage            # ou mova para ~/.local/bin
+
+# Toolkits em shell (kit + flash)
+gh release download -R Misael-art/android-dex -p '*.tar.gz'
+tar xzf android-dex-kit-*.tar.gz   && ( cd android-dex-kit   && ./install.sh )
+tar xzf android-dex-flash-*.tar.gz && ( cd android-dex-flash && ./install.sh )
+
+# UI via pip/pipx (alternativa ao AppImage)
+gh release download -R Misael-art/android-dex -p 'android_dex_ui-*.whl'
+pipx install ./android_dex_ui-*.whl      # expõe android-dex-ui, android-dexd, android-dex-setup
+
+# Conferir integridade
+gh release download -R Misael-art/android-dex -p 'SHA256SUMS' && sha256sum -c SHA256SUMS
+```
+
+> [!TIP]
+> Algumas distros trazem o **AppImageLauncher**, que abre um diálogo de integração
+> ao executar o AppImage — aceite-o, ou rode com `APPIMAGELAUNCHER_DISABLE=1` para
+> pular a interação. O AppImage usa FUSE; sem FUSE, rode com `--appimage-extract-and-run`.
+
+### B) A partir do código-fonte
+
+```bash
+git clone https://github.com/Misael-art/android-dex.git
+cd android-dex
+
+( cd android-dex-kit   && ./install.sh )   # desktop: scrcpy/adb, udev, launcher, systemd
+( cd android-dex-flash && ./install.sh )   # manutenção: adb/fastboot; heimdall p/ Samsung
+
+# UI (opcional, para desenvolver)
+cd android-dex-ui && python3 -m venv .venv && . .venv/bin/activate && pip install -e '.[test]'
+```
+
+### Requisitos
+
+| Para | Precisa de |
+| :-- | :-- |
+| Desktop (kit) | `adb`, `scrcpy` ≥ 3.0 — o `install.sh` instala pela sua distro |
+| Manutenção (flash) | `adb`, `fastboot`; `heimdall` para os roteiros Samsung |
+| UI a partir do source | Python ≥ 3.11 + `PySide6-Essentials` ≥ 6.8 (o AppImage já traz tudo) |
+
+Os `install.sh` pedem elevação (sudo/pacman/apt) **apenas** para pacotes do sistema
+e para a regra **udev** (acesso USB sem root); a parte de usuário vai para
+`~/.local/bin`. Depois, rode **`android-dex-doctor`** para um diagnóstico do host
+(adb, scrcpy, udev e aparelhos visíveis). Suporte a **Linux** (a UI reutilizará o
+mesmo contrato no Windows futuramente).
 
 ---
 

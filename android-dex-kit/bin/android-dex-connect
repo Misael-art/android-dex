@@ -38,6 +38,21 @@ persist_ip() {
   log_ok "IP salvo no config: $ip"
 }
 
+# Resumo claro do que foi salvo e do que fazer a seguir.
+wifi_saved_summary() {
+  local ip="$1"
+  cat >&2 <<TXT
+
+  ${C_GREEN}${C_BOLD}Wi-Fi configurado.${C_RESET} Endereço de CONEXÃO salvo: ${C_BOLD}${ip}${C_RESET}
+  (guardado em ${ADX_CONFIG_FILE} como DEVICE_IP — é o que o app usa para reconectar sozinho.)
+
+  ${C_BOLD}Próximos passos:${C_RESET}
+    1) Pode desconectar o cabo USB.
+    2) Suba a sessão sem fio:   ${C_BOLD}android-dex --wifi${C_RESET}
+    3) Trocou de rede / o IP mudou? Rode este assistente de novo.
+TXT
+}
+
 migrate_from_usb() {
   local s rc=0 endpoint
   adx_valid_port "$ADB_TCP_PORT" || die "ADB_TCP_PORT/--port deve estar entre 1 e 65535."
@@ -65,7 +80,8 @@ migrate_from_usb() {
   sleep 1
   if adb_serial_online "$endpoint"; then
     persist_ip "$endpoint"
-    log_ok "Conectado por Wi-Fi em $endpoint. Pode desconectar o cabo."
+    log_ok "Conectado por Wi-Fi em $endpoint."
+    wifi_saved_summary "$endpoint"
   else
     die "Conexão TCP falhou. Confira firewall/rede e tente novamente."
   fi
@@ -97,10 +113,17 @@ pair_manual() {
   local pair_addr="${1:-}" code="${2:-}"
   cat >&2 <<'TXT'
 
-  Depuração sem fio (Android 11+):
+  Depuração sem fio (Android 11+). Atenção: são DOIS endereços diferentes.
     No aparelho:  Configurações → Opções do desenvolvedor → Depuração sem fio
-    Toque em "Parear dispositivo com código de emparelhamento".
-    Anote o "Endereço IP e porta" e o "Código Wi-Fi" (6 dígitos).
+
+    (1) EMPARELHAMENTO (temporário, muda a cada vez):
+        Toque em "Parear dispositivo com código de emparelhamento".
+        Anote o "Endereço IP e porta" e o "Código Wi-Fi" (6 dígitos) mostrados.
+        → use-os agora, abaixo. Servem só para o pareamento inicial.
+
+    (2) CONEXÃO (persistente): é o IP:porta que aparece na tela principal da
+        "Depuração sem fio". É o que fica salvo para reconectar. Se eu não
+        descobrir sozinho por mDNS, vou pedir esse endereço a seguir.
 
 TXT
   if [ -z "$pair_addr" ]; then
@@ -140,7 +163,7 @@ TXT
   sleep 1
   if adb_serial_online "$connect_addr"; then
     persist_ip "$connect_addr"
-    log_ok "Pronto! Rode:  android-dex --wifi"
+    wifi_saved_summary "$connect_addr"
   else
     die "Não conectou em $connect_addr. Tente 'adb connect $connect_addr' manualmente."
   fi

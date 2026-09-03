@@ -308,3 +308,21 @@ adb_discover_connect_endpoint() {
     *) log_error "Há $count endpoints de conexão mDNS para ${wanted_host:-os aparelhos detectados}; informe IP:PORTA explicitamente."; return 2 ;;
   esac
 }
+
+# --- Capacidade de modo desktop (MIUI/HyperOS e afins) ----------------------
+# Em MIUI/HyperOS (Xiaomi/Redmi/POCO) o shell do adb só recebe
+# WRITE_SECURE_SETTINGS quando o usuário liga "Depuração USB (Configurações de
+# segurança)". É o mesmo portão do INJECT_EVENTS (controle por mouse/teclado) e
+# do 'settings put global' (freeform/desktop). Sem isso o display virtual do DeX
+# fica preto e sem controle. Esta checagem é SOMENTE LEITURA.
+# Ecoa: yes | no | unknown
+adx_secure_settings_state() {
+  local s="$1" out
+  out="$(adb -s "$s" shell dumpsys package com.android.shell 2>/dev/null | tr -d '\r')"
+  [ -n "$out" ] || { echo unknown; return 0; }
+  case "$out" in
+    *"WRITE_SECURE_SETTINGS: granted=true"*)  echo yes ;;
+    *"WRITE_SECURE_SETTINGS: granted=false"*) echo no ;;
+    *) echo unknown ;;
+  esac
+}

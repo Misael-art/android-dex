@@ -1,0 +1,67 @@
+# Maintainer: Misael-art <misael.junio.oliveira@gmail.com>
+pkgname=android-dex
+pkgver=0.1.3
+pkgrel=1
+pkgdesc="Desktop/DeX para Android via scrcpy+ADB, com UI Qt e manutenção guiada (android-dex-flash)"
+arch=('any')
+url="https://github.com/Misael-art/android-dex"
+license=('MIT')
+depends=('bash' 'python' 'pyside6' 'qt6-declarative' 'hicolor-icon-theme' 'android-tools' 'scrcpy')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=(
+  'heimdall: gravação em aparelhos Samsung (android-dex-flash)'
+  'android-udev: regras udev adicionais para ADB/fastboot sem root'
+  'avahi: descoberta mDNS no pareamento Wi-Fi'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('b7e8444e1b56429fc9cb9a5cbe9ee18427a93ce388b477d065040264217a5c8c')
+
+build() {
+  cd "$pkgname-$pkgver/android-dex-ui"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  bash -n android-dex-kit/bin/* android-dex-flash/bin/* android-dex-flash/lib/*.sh
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  local share="$pkgdir/usr/lib/$pkgname"
+
+  python -m installer --destdir="$pkgdir" android-dex-ui/dist/*.whl
+
+  # Os scripts resolvem as libs relativas ao próprio caminho (readlink -f),
+  # então cada toolkit mantém a árvore bin/ lib/ profiles/ e /usr/bin só tem links.
+  install -d "$share/kit" "$share/flash"
+  cp -r android-dex-kit/{bin,lib,profiles} "$share/kit/"
+  cp -r android-dex-flash/{bin,lib} "$share/flash/"
+  chmod 0755 "$share"/kit/bin/* "$share"/flash/bin/*
+
+  install -d "$pkgdir/usr/bin"
+  local tool
+  for tool in android-dex android-dex-connect android-dex-doctor; do
+    ln -s "../lib/$pkgname/kit/bin/$tool" "$pkgdir/usr/bin/$tool"
+  done
+  ln -s "../lib/$pkgname/flash/bin/android-dex-flash" "$pkgdir/usr/bin/android-dex-flash"
+
+  install -Dm0644 android-dex-kit/desktop/android-dex.desktop \
+    "$pkgdir/usr/share/applications/android-dex.desktop"
+  install -Dm0644 android-dex-ui/appimage/android-dex-ui.desktop \
+    "$pkgdir/usr/share/applications/android-dex-ui.desktop"
+  install -Dm0644 android-dex-kit/icons/android-dex.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/android-dex.svg"
+  install -Dm0644 android-dex-ui/src/android_dex_ui/assets/images/android-dex-ui-icon.png \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/android-dex-ui.png"
+
+  # Serviço de usuário (socket activation): systemctl --user enable --now android-dexd.socket
+  if [ -d android-dex-ui/systemd ]; then
+    install -Dm0644 -t "$pkgdir/usr/lib/systemd/user" android-dex-ui/systemd/android-dexd.{socket,service}
+    sed -i 's|^ExecStart=.*|ExecStart=/usr/bin/android-dexd|; /^Environment=PATH=/d' \
+      "$pkgdir/usr/lib/systemd/user/android-dexd.service"
+  fi
+
+  install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

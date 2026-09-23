@@ -119,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
 
         QTimer.singleShot(1400, capture)
     result = app.exec()
+    controller.shutdown()
     if demo_process is not None and args.demo:
         demo_process.terminate()
         demo_process.wait(timeout=2)

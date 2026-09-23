@@ -6,7 +6,7 @@ import json
 import socket
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .paths import socket_path
 class ClientError(RuntimeError):
@@ -67,6 +67,55 @@ class AndroidDexClient:
         if isinstance(error, dict):
             raise ClientError(error)
         return response.get("result")
+
+    def subscribe(self, after: int = 0, timeout: float = 45) -> Iterator[dict[str, Any]]:
+        """Conexão persistente: produz os params de cada evento enviado pelo serviço.
+
+        O serviço envia heartbeat a cada 15 s; `timeout` maior que isso detecta
+        um serviço travado. Levanta ClientError ao perder a conexão.
+        """
+        request_id = uuid.uuid4().hex
+        request = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "events.subscribe",
+            "params": {"after": after},
+        }
+        encoded = json.dumps(request, separators=(",", ":")).encode() + b"\n"
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(timeout)
+        try:
+            try:
+                connection.connect(str(self.path))
+                connection.sendall(encoded)
+                stream = connection.makefile("rb")
+                ack = json.loads(stream.readline() or b"null")
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ClientError(
+                    {"code": "E-SERVICE-OFFLINE", "title": "Serviço indisponível", "detail": str(exc)}
+                ) from exc
+            if not isinstance(ack, dict) or ack.get("id") != request_id or "error" in ack:
+                error = ack.get("error") if isinstance(ack, dict) else None
+                raise ClientError(
+                    error
+                    if isinstance(error, dict)
+                    else {"code": "E-RPC-RESPONSE", "title": "Resposta inválida", "detail": "ack"}
+                )
+            while True:
+                try:
+                    line = stream.readline()
+                except OSError as exc:
+                    raise ClientError(
+                        {"code": "E-STREAM-LOST", "title": "Conexão perdida", "detail": str(exc)}
+                    ) from exc
+                if not line:
+                    raise ClientError(
+                        {"code": "E-STREAM-LOST", "title": "Conexão perdida", "detail": "EOF"}
+                    )
+                message = json.loads(line)
+                yield {"event": message.get("method"), **message.get("params", {})}
+        finally:
+            connection.close()
 
 
 RpcClient = AndroidDexClient

@@ -7,7 +7,7 @@
   "required": ["event", "jobId", "correlationId", "timestamp"],
   "properties": {
     "event": {
-      "enum": ["device.changed", "session.changed", "job.progress", "job.completed", "job.failed"]
+      "enum": ["device.changed", "session.changed", "job.progress", "job.completed", "job.failed", "events.heartbeat"]
     },
     "seq": {"type": "integer", "minimum": 1},
     "jobId": {"type": "string", "minLength": 1},

@@ -85,10 +85,32 @@ O serviço só conhece métodos e argumentos allowlisted. Não há `shell=True`,
 | :-- | :-- |
 | Socket | `$XDG_RUNTIME_DIR/android-dex/core.sock` |
 | Sessões/jobs/planos | `$XDG_STATE_HOME/android-dex-ui/` |
-| Logs de sessão | `$XDG_STATE_HOME/android-dex-ui/logs/` |
+| Logs de sessão e de jobs | `$XDG_STATE_HOME/android-dex-ui/logs/` |
 
 Fechar a janela não encerra `android-dexd` nem uma sessão ativa. Use a tela
 Sessões ou `android-dex --stop` para encerrar de forma explícita.
+
+### Eventos em tempo real
+
+A UI assina `events.subscribe`: a primeira mensagem de uma conexão dedicada
+recebe um `result` de confirmação e, depois, notificações JSON-RPC (uma por
+linha) com `seq` crescente, mais um `events.heartbeat` a cada 15 s. Se a
+conexão cair, a UI volta ao `events.poll` e tenta assinar de novo. Chamado pela
+via normal (`dispatch`), `events.subscribe` responde `E-RPC-STREAM`.
+
+### Serviço systemd de usuário (opcional)
+
+Com socket activation, o systemd cria o socket (0600) e só inicia
+`android-dexd` na primeira conexão da UI:
+
+```bash
+install -Dm0644 -t ~/.config/systemd/user systemd/android-dexd.{socket,service}
+systemctl --user daemon-reload
+systemctl --user enable --now android-dexd.socket
+```
+
+A unidade espera `~/.local/bin/android-dexd` (`pip install --user` ou `pipx`).
+O pacote Arch (`packaging/aur/`) já instala as unidades apontando para `/usr/bin`.
 
 ## Segurança da manutenção
 

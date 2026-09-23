@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
-## [Unreleased]
+## [0.1.3] — 2026-09-22
 
 ### android-dex-ui — robustez do serviço `android-dexd`
 - **Plano de manutenção de uso único**: `maintenance.apply` consome o plano

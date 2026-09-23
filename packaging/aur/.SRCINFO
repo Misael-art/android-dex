@@ -1,0 +1,25 @@
+pkgbase = android-dex
+	pkgdesc = Desktop/DeX para Android via scrcpy+ADB, com UI Qt e manutenção guiada (android-dex-flash)
+	pkgver = 0.1.4
+	pkgrel = 1
+	url = https://github.com/Misael-art/android-dex
+	arch = any
+	license = MIT
+	makedepends = python-build
+	makedepends = python-installer
+	makedepends = python-setuptools
+	makedepends = python-wheel
+	depends = bash
+	depends = python
+	depends = pyside6
+	depends = qt6-declarative
+	depends = hicolor-icon-theme
+	depends = android-tools
+	depends = scrcpy
+	optdepends = heimdall: gravação em aparelhos Samsung (android-dex-flash)
+	optdepends = android-udev: regras udev adicionais para ADB/fastboot sem root
+	optdepends = avahi: descoberta mDNS no pareamento Wi-Fi
+	source = android-dex-0.1.4.tar.gz::https://github.com/Misael-art/android-dex/archive/refs/tags/v0.1.4.tar.gz
+	sha256sums = a5df30f7f2038b4ed8f13ae77cdba0224ecccbd3c7b787812bc3e885aa050bd2
+
+pkgname = android-dex

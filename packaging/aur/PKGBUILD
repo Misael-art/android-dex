@@ -1,6 +1,6 @@
 # Maintainer: Misael-art <misael.junio.oliveira@gmail.com>
 pkgname=android-dex
-pkgver=0.1.3
+pkgver=0.1.4
 pkgrel=1
 pkgdesc="Desktop/DeX para Android via scrcpy+ADB, com UI Qt e manutenção guiada (android-dex-flash)"
 arch=('any')
@@ -14,7 +14,7 @@ optdepends=(
   'avahi: descoberta mDNS no pareamento Wi-Fi'
 )
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('b7e8444e1b56429fc9cb9a5cbe9ee18427a93ce388b477d065040264217a5c8c')
+sha256sums=('a5df30f7f2038b4ed8f13ae77cdba0224ecccbd3c7b787812bc3e885aa050bd2')
 
 build() {
   cd "$pkgname-$pkgver/android-dex-ui"

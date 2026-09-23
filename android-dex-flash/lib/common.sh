@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Biblioteca: variáveis globais aqui são lidas pelos scripts que fazem source.
+# shellcheck disable=SC2034
 # common.sh — funções compartilhadas do Android-DEX Kit
 # Sourced por: android-dex, android-dex-connect, install.sh, uninstall.sh
 # Não deve ser executado diretamente.

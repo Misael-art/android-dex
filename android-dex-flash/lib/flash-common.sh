@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Biblioteca: variáveis globais aqui são lidas pelos scripts que fazem source.
+# shellcheck disable=SC2034
 # flash-common.sh — camada de segurança e detecção do android-dex-flash.
 # Sourced por: bin/android-dex-flash e pelos drivers em lib/drivers/*.sh.
 # Depende de lib/common.sh (fundação compartilhada com android-dex).

@@ -24,13 +24,13 @@ syntax:
 	bash -n $(SCRIPTS)
 
 lint:
-	shellcheck -x -e SC1090,SC1091,SC2034,SC2153 $(SCRIPTS)
+	shellcheck -x -e SC1090,SC1091 $(SCRIPTS)
 
 powershell:
 	@if command -v pwsh >/dev/null 2>&1; then pwsh -NoProfile -File tests/powershell-syntax.ps1; else echo "pwsh ausente; parser PowerShell será validado no job Windows da CI"; fi
 
 ui-test:
-	QT_QPA_PLATFORM=offscreen python3 -m pytest -q android-dex-ui/tests
+	PYTHONPATH="$(CURDIR)/android-dex-ui/src" QT_QPA_PLATFORM=offscreen python3 -m pytest -q android-dex-ui/tests
 
 qml-test:
 	@runner="$$(if [ -x /usr/lib/qt6/bin/qmltestrunner ]; then printf /usr/lib/qt6/bin/qmltestrunner; else command -v qmltestrunner; fi)"; \
@@ -39,7 +39,7 @@ qml-test:
 		-import android-dex-ui/src/android_dex_ui/qml -o -,txt
 
 ui-smoke:
-	QT_QPA_PLATFORM=offscreen python3 -m android_dex_ui.main --demo --screenshot /tmp/android-dex-ui-smoke.png
+	PYTHONPATH="$(CURDIR)/android-dex-ui/src" QT_QPA_PLATFORM=offscreen python3 -m android_dex_ui.main --demo --screenshot /tmp/android-dex-ui-smoke.png
 
 appimage:
 	bash android-dex-ui/appimage/build-appimage.sh

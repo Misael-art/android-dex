@@ -12,9 +12,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
@@ -24,10 +24,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libegl1
 
       - name: Fetch official appimagetool
+
+        env:
+
+          APPIMAGETOOL_VERSION: "1.9.1"
+
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
         run: |
           curl --fail --location --retry 3 \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage \
             --output "$RUNNER_TEMP/appimagetool"
+          echo "${APPIMAGETOOL_SHA256}  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod 0755 "$RUNNER_TEMP/appimagetool"
 
       - name: Build AppImage

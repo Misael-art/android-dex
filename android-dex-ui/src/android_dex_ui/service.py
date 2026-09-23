@@ -23,9 +23,11 @@ from typing import Any, Callable
 from .paths import find_entrypoint, log_dir, socket_path, state_dir
 from .protocol import MACHINE_FORMAT, RpcFault, failure, parse_request, success
 from .runner import run_checked
-from .state import ensure_private_dir, read_json, write_json
+from .state import ensure_private_dir, read_json, write_json, write_private_text
 
 PLAN_TTL_SECONDS = 600
+EVENT_BUFFER = 200
+JOB_OUTPUT_TAIL = 4000
 SERIAL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 ENDPOINT_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\]):(?:[1-9][0-9]{0,4})$"
@@ -47,6 +49,16 @@ def _now() -> float:
     return time.time()
 
 
+def _proc_start(pid: int) -> str | None:
+    """Tempo de início do processo (campo 22 de /proc/<pid>/stat); detecta PID reutilizado."""
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii", errors="replace")
+    except OSError:
+        return None
+    fields = raw.rsplit(")", 1)[-1].split()
+    return fields[19] if len(fields) > 19 else None
+
+
 def _utc_text(timestamp: float | None = None) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp or _now()))
 
@@ -59,10 +71,13 @@ class AndroidDexCore:
         self._sessions_path = state_dir() / "sessions.json"
         self._plans_dir = state_dir() / "plans"
         self._events: list[dict[str, Any]] = []
+        self._event_seq = 0
+        self._cancel_flags: dict[str, threading.Event] = {}
         self._jobs: dict[str, dict[str, Any]] = read_json(self._jobs_path, {})
         self._sessions: dict[str, dict[str, Any]] = read_json(self._sessions_path, {})
         ensure_private_dir(self._plans_dir)
         ensure_private_dir(log_dir())
+        self._reconcile_jobs()
         self.methods: dict[str, Callable[[dict[str, Any]], Any]] = {
             "system.snapshot": self.system_snapshot,
             "device.list": self.device_list,
@@ -97,25 +112,54 @@ class AndroidDexCore:
             )
         return handler(params)
 
+    def _reconcile_jobs(self) -> None:
+        """Jobs ativos de um daemon anterior não têm mais worker: marca como interrompidos."""
+        changed = False
+        for job in self._jobs.values():
+            if job.get("status") in {"queued", "running"}:
+                job["status"] = "interrupted"
+                job["completedAt"] = _utc_text()
+                job["error"] = RpcFault(
+                    "E-JOB-INTERRUPTED",
+                    "Job interrompido",
+                    "O serviço foi reiniciado durante a execução. Verifique o aparelho antes de tentar novamente.",
+                    True,
+                    ("Abrir diagnóstico", "Criar nova prévia"),
+                ).to_object()
+                changed = True
+        if changed:
+            write_json(self._jobs_path, self._jobs)
+
     def _emit(self, name: str, job_id: str, correlation_id: str, **data: Any) -> None:
         with self._lock:
+            self._event_seq += 1
             self._events.append(
                 {
                     "event": name,
+                    "seq": self._event_seq,
                     "jobId": job_id,
                     "correlationId": correlation_id,
                     "timestamp": _utc_text(),
                     **data,
                 }
             )
-            self._events = self._events[-200:]
+            self._events = self._events[-EVENT_BUFFER:]
 
     def events_poll(self, params: dict[str, Any]) -> dict[str, Any]:
         after = params.get("after", 0)
-        if not isinstance(after, int) or after < 0:
+        if not isinstance(after, int) or isinstance(after, bool) or after < 0:
             raise RpcFault("E-PARAM-AFTER", "Cursor inválido", "after deve ser inteiro.")
         with self._lock:
-            return {"cursor": len(self._events), "events": self._events[after:]}
+            if after > self._event_seq:
+                # Cursor de um daemon anterior: recomeça do início deste buffer.
+                after = 0
+            events = [dict(row) for row in self._events if row["seq"] > after]
+            oldest = self._events[0]["seq"] if self._events else self._event_seq + 1
+            return {
+                "cursor": self._event_seq,
+                "events": events,
+                "truncated": after + 1 < oldest,
+            }
 
     def _tool(self, name: str) -> str:
         try:
@@ -306,90 +350,117 @@ class AndroidDexCore:
 
     def desktop_start(self, params: dict[str, Any]) -> dict[str, Any]:
         plan = self.desktop_plan(params)
-        active = [
-            session
-            for session in self.session_list({})["sessions"]
-            if session.get("status") == "running"
-        ]
-        if active:
-            raise RpcFault(
-                "E-SESSION-ACTIVE",
-                "Já existe uma sessão em execução",
-                "Encerre a sessão atual antes de iniciar outra para preservar a restauração exata dos ajustes.",
-                True,
-                ("Abrir sessões",),
-            )
-        if self.demo:
+        with self._lock:
+            active = [
+                session
+                for session in self.session_list({})["sessions"]
+                if session.get("status") == "running"
+            ]
+            if active:
+                raise RpcFault(
+                    "E-SESSION-ACTIVE",
+                    "Já existe uma sessão em execução",
+                    "Encerre a sessão atual antes de iniciar outra para preservar a restauração exata dos ajustes.",
+                    True,
+                    ("Abrir sessões",),
+                )
+            if self.demo:
+                session = {
+                    "id": uuid.uuid4().hex,
+                    "serial": plan["device"]["serial"],
+                    "mode": plan["runtimeMode"],
+                    "status": "running",
+                    "startedAt": _utc_text(),
+                    "pid": 0,
+                    "demo": True,
+                }
+                self._sessions[session["id"]] = session
+                write_json(self._sessions_path, self._sessions)
+                return dict(session)
+            command = [self._tool("android-dex"), "--device", plan["device"]["serial"]]
+            if plan["requestedMode"] == "dex":
+                command.append("--dex")
+            elif plan["requestedMode"] == "mirror":
+                command.append("--mirror")
+            logfile = log_dir() / f"desktop-{int(_now())}.log"
+            handle = logfile.open("ab", buffering=0)
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    shell=False,
+                    start_new_session=True,
+                )
+            finally:
+                handle.close()
             session = {
                 "id": uuid.uuid4().hex,
                 "serial": plan["device"]["serial"],
                 "mode": plan["runtimeMode"],
                 "status": "running",
                 "startedAt": _utc_text(),
-                "pid": 0,
-                "demo": True,
+                "pid": process.pid,
+                "procStart": _proc_start(process.pid),
+                "log": str(logfile),
             }
             self._sessions[session["id"]] = session
             write_json(self._sessions_path, self._sessions)
-            return session
-        command = [self._tool("android-dex"), "--device", plan["device"]["serial"]]
-        if plan["requestedMode"] == "dex":
-            command.append("--dex")
-        elif plan["requestedMode"] == "mirror":
-            command.append("--mirror")
-        logfile = log_dir() / f"desktop-{int(_now())}.log"
-        handle = logfile.open("ab", buffering=0)
-        try:
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                shell=False,
-                start_new_session=True,
-            )
-        finally:
-            handle.close()
-        session = {
-            "id": uuid.uuid4().hex,
-            "serial": plan["device"]["serial"],
-            "mode": plan["runtimeMode"],
-            "status": "running",
-            "startedAt": _utc_text(),
-            "pid": process.pid,
-            "log": str(logfile),
-        }
-        self._sessions[session["id"]] = session
-        write_json(self._sessions_path, self._sessions)
         self._emit("session.changed", session["id"], session["id"], session=session)
-        return session
+        return dict(session)
 
     def desktop_stop(self, _params: dict[str, Any]) -> dict[str, Any]:
+        failed: RpcFault | None = None
         if not self.demo:
-            run_checked([self._tool("android-dex"), "--stop"], timeout=20, allow_failure=True)
-        for session in self._sessions.values():
-            if session.get("status") == "running":
-                session["status"] = "stopped"
-                session["stoppedAt"] = _utc_text()
-        write_json(self._sessions_path, self._sessions)
-        return {"stopped": True, "sessions": list(self._sessions.values())}
+            result = run_checked([self._tool("android-dex"), "--stop"], timeout=20, allow_failure=True)
+            if result.returncode:
+                detail = (result.stderr or result.stdout or "Falha sem saída").strip()[-4000:]
+                failed = RpcFault(
+                    "E-STOP-FAILED",
+                    "Não foi possível encerrar a sessão",
+                    detail,
+                    True,
+                    ("Tentar novamente", "Abrir diagnóstico"),
+                )
+        with self._lock:
+            for session in self._sessions.values():
+                if session.get("status") == "running":
+                    if failed:
+                        session["status"] = "stop-failed"
+                    else:
+                        session["status"] = "stopped"
+                        session["stoppedAt"] = _utc_text()
+            write_json(self._sessions_path, self._sessions)
+            sessions = [dict(row) for row in self._sessions.values()]
+        if failed:
+            raise failed
+        return {"stopped": True, "sessions": sessions}
 
     def session_list(self, _params: dict[str, Any]) -> dict[str, Any]:
-        changed = False
-        for session in self._sessions.values():
-            pid = int(session.get("pid", 0) or 0)
-            if session.get("status") == "running" and pid > 0:
+        with self._lock:
+            changed = False
+            for session in self._sessions.values():
+                pid = int(session.get("pid", 0) or 0)
+                if session.get("status") not in {"running", "stop-failed"} or pid <= 0:
+                    continue
                 try:
                     os.kill(pid, 0)
+                    recorded = session.get("procStart")
+                    alive = recorded is None or _proc_start(pid) in (None, recorded)
                 except ProcessLookupError:
+                    alive = False
+                except PermissionError:
+                    # PID existe mas pertence a outro usuário: não é mais nossa sessão.
+                    alive = False
+                if not alive:
                     session["status"] = "finished"
                     session["finishedAt"] = _utc_text()
                     changed = True
-                except PermissionError:
-                    session["status"] = "unknown"
-        if changed:
-            write_json(self._sessions_path, self._sessions)
-        return {"sessions": sorted(self._sessions.values(), key=lambda row: row["startedAt"], reverse=True)}
+            if changed:
+                write_json(self._sessions_path, self._sessions)
+            rows = [dict(row) for row in self._sessions.values()]
+        return {"sessions": sorted(rows, key=lambda row: row["startedAt"], reverse=True)}
 
     def wifi_discover(self, _params: dict[str, Any]) -> dict[str, Any]:
         if self.demo:
@@ -642,6 +713,14 @@ class AndroidDexCore:
                 ("Recarregar aparelho", "Criar nova prévia"),
             )
         self._verify_bindings(plan.get("bindings", []))
+        with self._lock:
+            # Plano de uso único: consumido atomicamente antes de qualquer execução.
+            try:
+                os.replace(plan_path, plan_path.with_suffix(".used"))
+            except FileNotFoundError as exc:
+                raise RpcFault(
+                    "E-PLAN-MISSING", "Plano não encontrado", "Crie uma nova prévia."
+                ) from exc
         job_id = uuid.uuid4().hex
         correlation_id = uuid.uuid4().hex
         job = {
@@ -657,6 +736,7 @@ class AndroidDexCore:
         }
         with self._lock:
             self._jobs[job_id] = job
+            self._cancel_flags[job_id] = threading.Event()
             write_json(self._jobs_path, self._jobs)
         self._emit("job.progress", job_id, correlation_id, progress=0, status="queued")
         thread = threading.Thread(
@@ -664,8 +744,9 @@ class AndroidDexCore:
             args=(job_id, correlation_id, plan, confirmation),
             daemon=True,
         )
+        snapshot = dict(job)
         thread.start()
-        return job
+        return snapshot
 
     def _apply_worker(
         self,
@@ -674,6 +755,11 @@ class AndroidDexCore:
         plan: dict[str, Any],
         confirmation: str,
     ) -> None:
+        flag = self._cancel_flags.get(job_id)
+        if flag is not None and flag.is_set():
+            self._update_job(job_id, status="cancelled", completedAt=_utc_text())
+            self._emit("job.failed", job_id, correlation_id, status="cancelled")
+            return
         self._update_job(job_id, status="running", progress=10, startedAt=_utc_text())
         self._emit("job.progress", job_id, correlation_id, progress=10, status="running")
         try:
@@ -699,13 +785,17 @@ class AndroidDexCore:
                 if confirmation == "KNOX PERMANENTE":
                     input_text += "SIM\n"
                 result = run_checked(argv, input_text=input_text, env=env, timeout=1800)
-                output = (result.stdout + result.stderr).strip()[-12000:]
+                output = (result.stdout + result.stderr).strip()
+            job_log = log_dir() / f"job-{job_id}.log"
+            write_private_text(job_log, output + "\n")
+            output = output[-JOB_OUTPUT_TAIL:]
             self._update_job(
                 job_id,
                 status="completed",
                 progress=100,
                 completedAt=_utc_text(),
                 output=output,
+                log=str(job_log),
             )
             self._emit("job.completed", job_id, correlation_id, progress=100, output=output)
         except RpcFault as fault:
@@ -734,26 +824,34 @@ class AndroidDexCore:
 
     def maintenance_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
         job_id = params.get("jobId")
-        job = self._jobs.get(str(job_id))
-        if not job:
-            raise RpcFault("E-JOB-MISSING", "Job não encontrado", "Atualize a lista.")
-        if not job.get("cancelable"):
-            raise RpcFault(
-                "E-JOB-CRITICAL",
-                "Cancelamento bloqueado",
-                "Uma gravação crítica não pode ser interrompida com segurança.",
-            )
-        return {"cancelled": False}
+        with self._lock:
+            job = self._jobs.get(job_id) if isinstance(job_id, str) else None
+            if not job:
+                raise RpcFault("E-JOB-MISSING", "Job não encontrado", "Atualize a lista.")
+            if not job.get("cancelable"):
+                raise RpcFault(
+                    "E-JOB-CRITICAL",
+                    "Cancelamento bloqueado",
+                    "Uma gravação crítica não pode ser interrompida com segurança.",
+                )
+            if job.get("status") not in {"queued", "running"}:
+                return {"cancelled": False, "status": job.get("status")}
+            flag = self._cancel_flags.setdefault(job_id, threading.Event())
+            flag.set()
+            return {"cancelled": True, "status": "cancelling"}
 
     def job_status(self, params: dict[str, Any]) -> dict[str, Any]:
         job_id = params.get("jobId")
-        if not isinstance(job_id, str) or job_id not in self._jobs:
-            raise RpcFault("E-JOB-MISSING", "Job não encontrado", "Atualize a lista.")
-        return self._jobs[job_id]
+        with self._lock:
+            if not isinstance(job_id, str) or job_id not in self._jobs:
+                raise RpcFault("E-JOB-MISSING", "Job não encontrado", "Atualize a lista.")
+            return dict(self._jobs[job_id])
 
     def _update_job(self, job_id: str, **changes: Any) -> None:
         with self._lock:
             self._jobs[job_id].update(changes)
+            if changes.get("status") not in {None, "queued", "running"}:
+                self._cancel_flags.pop(job_id, None)
             write_json(self._jobs_path, self._jobs)
 
     def _maintenance_inputs(
@@ -918,17 +1016,42 @@ class RpcServer(socketserver.ThreadingUnixStreamServer):
         super().__init__(address, RpcHandler)
 
 
+def _socket_alive(path: Path) -> bool:
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1)
+    try:
+        probe.connect(str(path))
+        return True
+    except (ConnectionRefusedError, FileNotFoundError):
+        return False
+    except OSError:
+        # Em dúvida, não derruba o socket de outro processo.
+        return True
+    finally:
+        probe.close()
+
+
 def serve(*, demo: bool = False) -> None:
     path = socket_path()
     ensure_private_dir(path.parent)
+    if path.exists() or path.is_symlink():
+        if _socket_alive(path):
+            raise SystemExit(f"android-dexd já está em execução em {path}")
+        path.unlink()
+    previous_umask = os.umask(0o077)
     try:
-        if path.exists():
-            path.unlink()
         server = RpcServer(str(path), AndroidDexCore(demo=demo))
+    finally:
+        os.umask(previous_umask)
+    try:
         path.chmod(0o600)
-        signal.signal(signal.SIGTERM, lambda *_args: threading.Thread(target=server.shutdown).start())
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(
+                signal.SIGTERM, lambda *_args: threading.Thread(target=server.shutdown).start()
+            )
         server.serve_forever(poll_interval=0.25)
     finally:
+        server.server_close()
         try:
             path.unlink()
         except FileNotFoundError:

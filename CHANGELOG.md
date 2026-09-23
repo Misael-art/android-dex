@@ -3,6 +3,31 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.1.3] — 2026-09-22
+
+### android-dex-ui — robustez do serviço `android-dexd`
+- **Plano de manutenção de uso único**: `maintenance.apply` consome o plano
+  atomicamente; reenviar o mesmo `planId` retorna `E-PLAN-MISSING`.
+- **Cursor de eventos monotônico**: `events.poll` não trava mais após 200
+  eventos; cada evento tem `seq` e a resposta indica `truncated`.
+- **Concorrência**: sessões e jobs protegidos por lock; dois `desktop.start`
+  simultâneos criam uma única sessão.
+- **Jobs órfãos** de um daemon anterior viram `interrupted` ao reiniciar.
+- **`maintenance.cancel`** cancela de fato jobs canceláveis ainda na fila;
+  gravações críticas continuam bloqueadas (`E-JOB-CRITICAL`).
+- **Instância única**: um segundo daemon não remove o socket de um serviço vivo;
+  o socket nasce com `umask 077`.
+- **Sessões confiáveis**: PID reutilizado é detectado pelo tempo de início do
+  processo; `--stop` com falha marca `stop-failed` e retorna `E-STOP-FAILED`.
+- **Log completo por job** em `job-<id>.log` (0600); `jobs.json` guarda só o final.
+
+### Qualidade e CI
+- `make ui-test`/`ui-smoke` funcionam sem instalar o pacote (`PYTHONPATH`).
+- ShellCheck sem exclusões globais de SC2034/SC2153; variável morta
+  `NON_INTERACTIVE` removida.
+- `appimagetool` fixado em 1.9.1 com verificação SHA-256; actions pinadas por SHA.
+- Template de issue "Relatório de aparelho" para destravar A1/A3/A4/A6.
+
 ## [0.1.2] — 2026-09-02
 
 ### android-dex-kit — experiência do modo desktop (DeX)

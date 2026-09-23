@@ -11,7 +11,7 @@ jobs:
   shell:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Syntax and regression tests
@@ -22,7 +22,7 @@ jobs:
   powershell:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Parse PowerShell 5.1-compatible scripts
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/powershell-syntax.ps1
@@ -48,8 +48,8 @@ jobs:
   ui:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
@@ -75,8 +75,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [shell, ui]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
@@ -84,10 +84,14 @@ jobs:
       - name: Install AppImage runtime libraries
         run: sudo apt-get update && sudo apt-get install -y libegl1
       - name: Fetch official appimagetool
+        env:
+          APPIMAGETOOL_VERSION: "1.9.1"
+          APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
         run: |
           curl --fail --location --retry 3 \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage \
             --output "$RUNNER_TEMP/appimagetool"
+          echo "${APPIMAGETOOL_SHA256}  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod 0755 "$RUNNER_TEMP/appimagetool"
       - name: Build AppImage
         env:
@@ -111,7 +115,7 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work archlinux:latest bash -lc '
             pacman -Sy --noconfirm libglvnd file &&
             bash android-dex-ui/appimage/smoke-appimage.sh android-dex-ui/build/Android-DEX-x86_64.AppImage /tmp/android-dex-arch.png'
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: Android-DEX-x86_64.AppImage
           path: android-dex-ui/build/Android-DEX-x86_64.AppImage

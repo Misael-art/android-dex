@@ -88,8 +88,8 @@ migrate_from_usb() {
 }
 
 discover_endpoint_with_retry() {
-  local host="$1" endpoint attempt rc=1
-  for attempt in 1 2 3; do
+  local host="$1" endpoint _ rc=1
+  for _ in 1 2 3; do
     endpoint="$(adb_discover_connect_endpoint "$host")"; rc=$?
     [ "$rc" = 0 ] && { printf '%s\n' "$endpoint"; return 0; }
     [ "$rc" = 2 ] && return 2

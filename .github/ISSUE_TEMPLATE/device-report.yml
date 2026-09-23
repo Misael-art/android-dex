@@ -1,0 +1,59 @@
+name: Relatório de aparelho
+description: Resultado real do android-dex em um aparelho (destrava perfis OEM, udev e detecção DeX).
+title: "[aparelho] <marca> <modelo> — Android <versão>"
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado! Relatórios de aparelhos físicos são o que falta para promover
+        os itens A1, A3, A4 e A6 do ROADMAP. **Não cole números de série, IMEI ou
+        dados pessoais** — o doctor é somente leitura, mas revise a saída antes.
+  - type: input
+    id: device
+    attributes:
+      label: Marca e modelo
+      placeholder: "Samsung Galaxy S24 (SM-S921B)"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Versão do Android / One UI / MIUI
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Distro Linux e versão do scrcpy
+      placeholder: "Manjaro, scrcpy 3.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Conexão
+      options: ["USB", "Wi-Fi (pareamento)", "Wi-Fi (--from-usb)"]
+    validations:
+      required: true
+  - type: checkboxes
+    id: results
+    attributes:
+      label: O que funcionou
+      options:
+        - label: "`adb devices` autorizou sem root (regra udev)"
+        - label: "Modo `dex` abriu área de trabalho utilizável"
+        - label: "Modo `mirror` funcionou"
+        - label: "`MODE=auto` escolheu o modo correto"
+        - label: "Launcher/decorações corretos sem editar config (perfil OEM)"
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Saída de `android-dex-doctor`
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Observações (tela preta, quedas, ajustes manuais necessários)

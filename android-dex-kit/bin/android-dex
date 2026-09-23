@@ -52,7 +52,6 @@ SESSION_LOCK_HELD=0
 SUPERVISOR_STATE_FILE="$ADX_STATE_DIR/supervisor.state"
 ACTION="run"
 JSON_OUTPUT=0
-NON_INTERACTIVE=0
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -73,7 +72,7 @@ parse_args() {
       --stop)    ACTION="stop" ;;
       --restore-tweaks) ACTION="restore-tweaks" ;;
       --json)    JSON_OUTPUT=1 ;;
-      --non-interactive) NON_INTERACTIVE=1; ONCE=1; RECONNECT=0 ;;
+      --non-interactive) ONCE=1; RECONNECT=0 ;;
       --device)
         [ $# -ge 2 ] || die "--device exige um SERIAL. Use --list para consultar."
         DEVICE_SERIAL="$2"; shift

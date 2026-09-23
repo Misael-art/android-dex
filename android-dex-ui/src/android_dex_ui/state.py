@@ -37,3 +37,10 @@ def write_json(path: Path, value: Any) -> None:
             os.unlink(temporary)
         except FileNotFoundError:
             pass
+
+
+def write_private_text(path: Path, text: str) -> None:
+    ensure_private_dir(path.parent)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)

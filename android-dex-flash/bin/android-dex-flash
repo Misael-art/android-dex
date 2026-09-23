@@ -54,6 +54,7 @@ else echo "FATAL: common.sh não encontrado" >&2; exit 1; fi
 . "$_libdir/flash-common.sh"
 
 # usa o log/estado próprios do flash
+# shellcheck disable=SC2034,SC2153  # ADXF_LOG_FILE vem de flash-common.sh; ADX_LOG_FILE é lido por lib/common.sh
 ADX_LOG_FILE="$ADXF_LOG_FILE"
 adxf_load_config
 

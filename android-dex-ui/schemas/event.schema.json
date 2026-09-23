@@ -9,6 +9,7 @@
     "event": {
       "enum": ["device.changed", "session.changed", "job.progress", "job.completed", "job.failed"]
     },
+    "seq": {"type": "integer", "minimum": 1},
     "jobId": {"type": "string", "minLength": 1},
     "correlationId": {"type": "string", "minLength": 1},
     "timestamp": {"type": "string", "format": "date-time"}

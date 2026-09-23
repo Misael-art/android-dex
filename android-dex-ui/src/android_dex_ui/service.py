@@ -20,14 +20,18 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from .oem import classify
 from .paths import find_entrypoint, log_dir, socket_path, state_dir
 from .protocol import MACHINE_FORMAT, RpcFault, failure, parse_request, success
+from .protocol import event as stream_event
 from .runner import run_checked
 from .state import ensure_private_dir, read_json, write_json, write_private_text
 
 PLAN_TTL_SECONDS = 600
 EVENT_BUFFER = 200
 JOB_OUTPUT_TAIL = 4000
+STREAM_HEARTBEAT_SECONDS = 15.0
+SD_LISTEN_FDS_START = 3
 SERIAL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 ENDPOINT_PATTERN = re.compile(
     r"^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:]+\]):(?:[1-9][0-9]{0,4})$"
@@ -72,6 +76,7 @@ class AndroidDexCore:
         self._plans_dir = state_dir() / "plans"
         self._events: list[dict[str, Any]] = []
         self._event_seq = 0
+        self._event_cond = threading.Condition(self._lock)
         self._cancel_flags: dict[str, threading.Event] = {}
         self._jobs: dict[str, dict[str, Any]] = read_json(self._jobs_path, {})
         self._sessions: dict[str, dict[str, Any]] = read_json(self._sessions_path, {})
@@ -99,7 +104,9 @@ class AndroidDexCore:
             "maintenance.apply": self.maintenance_apply,
             "maintenance.cancel": self.maintenance_cancel,
             "job.status": self.job_status,
+            "job.list": self.job_list,
             "events.poll": self.events_poll,
+            "events.subscribe": self.events_subscribe,
         }
 
     def dispatch(self, method: str, params: dict[str, Any]) -> Any:
@@ -144,6 +151,7 @@ class AndroidDexCore:
                 }
             )
             self._events = self._events[-EVENT_BUFFER:]
+            self._event_cond.notify_all()
 
     def events_poll(self, params: dict[str, Any]) -> dict[str, Any]:
         after = params.get("after", 0)
@@ -160,6 +168,22 @@ class AndroidDexCore:
                 "events": events,
                 "truncated": after + 1 < oldest,
             }
+
+    def events_subscribe(self, _params: dict[str, Any]) -> dict[str, Any]:
+        raise RpcFault(
+            "E-RPC-STREAM",
+            "Assinatura exige conexão dedicada",
+            "events.subscribe só funciona como primeira mensagem de uma conexão persistente.",
+        )
+
+    def wait_events(self, after: int, timeout: float) -> tuple[int, list[dict[str, Any]]]:
+        """Bloqueia até existir evento com seq > after (ou timeout). Usado pelo streaming."""
+        with self._event_cond:
+            if after > self._event_seq:
+                after = 0
+            self._event_cond.wait_for(lambda: self._event_seq > after, timeout=timeout)
+            events = [dict(row) for row in self._events if row["seq"] > after]
+            return self._event_seq, events
 
     def _tool(self, name: str) -> str:
         try:
@@ -847,6 +871,15 @@ class AndroidDexCore:
                 raise RpcFault("E-JOB-MISSING", "Job não encontrado", "Atualize a lista.")
             return dict(self._jobs[job_id])
 
+    def job_list(self, params: dict[str, Any]) -> dict[str, Any]:
+        limit = params.get("limit", 50)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+            raise RpcFault("E-PARAM-LIMIT", "Limite inválido", "limit deve ser inteiro entre 1 e 500.")
+        with self._lock:
+            rows = [dict(job) for job in self._jobs.values()]
+        rows.sort(key=lambda row: str(row.get("createdAt", "")), reverse=True)
+        return {"jobs": rows[:limit]}
+
     def _update_job(self, job_id: str, **changes: Any) -> None:
         with self._lock:
             self._jobs[job_id].update(changes)
@@ -953,22 +986,7 @@ class AndroidDexCore:
         return digest.hexdigest()
 
     def _oem(self, device: dict[str, Any]) -> str:
-        identity = f"{device.get('manufacturer', '')} {device.get('model', '')}".lower()
-        if "samsung" in identity:
-            return "samsung"
-        if "google" in identity or "pixel" in identity:
-            return "pixel"
-        if "xiaomi" in identity or "redmi" in identity or "poco" in identity:
-            return "xiaomi"
-        if "motorola" in identity or "lenovo" in identity:
-            return "motorola"
-        if "oneplus" in identity:
-            return "oneplus"
-        if "oppo" in identity or "realme" in identity:
-            return "oppo"
-        if "sony" in identity:
-            return "sony"
-        return "generic"
+        return classify(device.get("manufacturer", ""), device.get("model", "")).flash_driver
 
 
 class RpcHandler(socketserver.StreamRequestHandler):
@@ -993,9 +1011,15 @@ class RpcHandler(socketserver.StreamRequestHandler):
                 )
                 return
         raw = self.rfile.readline(1024 * 1024 + 1)
+        if not raw:
+            # Conexão sem requisição (ex.: sonda de instância única).
+            return
         request_id: str | int | None = None
         try:
             request_id, method, params = parse_request(raw.rstrip(b"\n"))
+            if method == "events.subscribe":
+                self._stream_events(request_id, params)
+                return
             payload = success(request_id, self.server.core.dispatch(method, params))
         except RpcFault as fault:
             payload = failure(request_id, fault)
@@ -1004,16 +1028,49 @@ class RpcHandler(socketserver.StreamRequestHandler):
                 request_id,
                 RpcFault("E-INTERNAL", "Falha interna", str(exc), True, ("Abrir diagnóstico",)),
             )
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _stream_events(self, request_id: str | int | None, params: dict[str, Any]) -> None:
+        after = params.get("after", 0)
+        if not isinstance(after, int) or isinstance(after, bool) or after < 0:
+            raise RpcFault("E-PARAM-AFTER", "Cursor inválido", "after deve ser inteiro.")
+        core = self.server.core
+        self.wfile.write(success(request_id, {"subscribed": True}))
+        self.wfile.flush()
+        try:
+            while not self.server.stopping.is_set():
+                cursor, events = core.wait_events(after, timeout=STREAM_HEARTBEAT_SECONDS)
+                if not events:
+                    # Heartbeat: detecta cliente desconectado mesmo sem eventos.
+                    self.wfile.write(stream_event("events.heartbeat", "-", "-", {"cursor": cursor}))
+                for row in events:
+                    data = {k: v for k, v in row.items() if k not in {"event", "jobId", "correlationId"}}
+                    self.wfile.write(
+                        stream_event(row["event"], row["jobId"], row["correlationId"], data)
+                    )
+                self.wfile.flush()
+                after = cursor
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
 
 
 class RpcServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
     allow_reuse_address = False
 
-    def __init__(self, address: str, core: AndroidDexCore) -> None:
+    def __init__(
+        self, address: str, core: AndroidDexCore, *, bind_and_activate: bool = True
+    ) -> None:
         self.core = core
-        super().__init__(address, RpcHandler)
+        self.stopping = threading.Event()
+        super().__init__(address, RpcHandler, bind_and_activate=bind_and_activate)
+
+    def shutdown(self) -> None:
+        self.stopping.set()
+        super().shutdown()
 
 
 def _socket_alive(path: Path) -> bool:
@@ -1031,7 +1088,43 @@ def _socket_alive(path: Path) -> bool:
         probe.close()
 
 
+def _activated_socket() -> socket.socket | None:
+    """Socket herdado do systemd (socket activation), se houver."""
+    if os.environ.get("LISTEN_PID") != str(os.getpid()):
+        return None
+    try:
+        count = int(os.environ.get("LISTEN_FDS", "0"))
+    except ValueError:
+        return None
+    if count < 1:
+        return None
+    for key in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):
+        os.environ.pop(key, None)
+    return socket.socket(fileno=SD_LISTEN_FDS_START)
+
+
+def _serve_forever(server: RpcServer) -> None:
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(
+            signal.SIGTERM, lambda *_args: threading.Thread(target=server.shutdown).start()
+        )
+    server.serve_forever(poll_interval=0.25)
+
+
 def serve(*, demo: bool = False) -> None:
+    inherited = _activated_socket()
+    if inherited is not None:
+        # systemd criou, protege (SocketMode=0600) e remove o socket.
+        server = RpcServer(
+            inherited.getsockname() or "", AndroidDexCore(demo=demo), bind_and_activate=False
+        )
+        server.socket.close()
+        server.socket = inherited
+        try:
+            _serve_forever(server)
+        finally:
+            server.server_close()
+        return
     path = socket_path()
     ensure_private_dir(path.parent)
     if path.exists() or path.is_symlink():
@@ -1045,11 +1138,7 @@ def serve(*, demo: bool = False) -> None:
         os.umask(previous_umask)
     try:
         path.chmod(0o600)
-        if threading.current_thread() is threading.main_thread():
-            signal.signal(
-                signal.SIGTERM, lambda *_args: threading.Thread(target=server.shutdown).start()
-            )
-        server.serve_forever(poll_interval=0.25)
+        _serve_forever(server)
     finally:
         server.server_close()
         try:

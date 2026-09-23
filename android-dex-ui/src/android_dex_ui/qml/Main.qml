@@ -328,7 +328,7 @@ ApplicationWindow {
             // Sessões
             StandardPage {
                 title: "Sessões"
-                subtitle: "Acompanhe e encerre desktops ativos; o serviço continua mesmo sem a janela."
+                subtitle: "Acompanhe desktops ativos e o histórico de manutenção; o serviço continua mesmo sem a janela."
                 actionText: "Atualizar"
                 actionIcon: "refresh"
                 onAction: backend.refresh()
@@ -342,12 +342,37 @@ ApplicationWindow {
                             RowLayout { anchors.fill: parent; anchors.margins: 18; spacing: 15
                                 Text { text: "desktop_windows"; color: modelData.status === "running" ? Theme.green : Theme.muted; font.family: "Material Symbols Rounded"; font.pixelSize: 30 }
                                 ColumnLayout { Layout.fillWidth: true; Text { text: modelData.mode === "dex" ? "Modo desktop" : "Espelhamento"; color: Theme.text; font.family: "Inter"; font.pixelSize: 16; font.weight: Font.DemiBold } Text { text: modelData.serial + "  ·  " + modelData.startedAt; color: Theme.muted; font.family: "Inter"; font.pixelSize: 12 } }
-                                StatusPill { label: modelData.status === "running" ? "Em execução" : "Encerrada"; accent: modelData.status === "running" ? Theme.green : Theme.muted }
-                                AppButton { visible: modelData.status === "running"; text: "Encerrar"; iconName: "stop_circle"; danger: true; onClicked: backend.stopDesktop(modelData.id) }
+                                StatusPill { label: ({ "running": "Em execução", "stop-failed": "Falha ao encerrar", "unknown": "Desconhecida" })[modelData.status] || "Encerrada"; accent: modelData.status === "running" ? Theme.green : (modelData.status === "stop-failed" ? Theme.red : Theme.muted) }
+                                AppButton { visible: modelData.status === "running" || modelData.status === "stop-failed"; text: "Encerrar"; iconName: "stop_circle"; danger: true; onClicked: backend.stopDesktop(modelData.id) }
                             }
                         }
                     }
                     Text { visible: backend.sessions.length === 0; text: "Nenhuma sessão registrada."; color: Theme.muted; font.family: "Inter"; font.pixelSize: 15 }
+
+                    Text { Layout.topMargin: 22; text: "Histórico de manutenção"; color: Theme.text; font.family: "Inter"; font.pixelSize: 20; font.weight: Font.DemiBold }
+                    Repeater {
+                        model: backend.jobs
+                        delegate: Rectangle {
+                            required property var modelData
+                            readonly property bool ok: modelData.status === "completed"
+                            readonly property bool active: modelData.status === "queued" || modelData.status === "running"
+                            Layout.fillWidth: true; Layout.preferredHeight: jobColumn.implicitHeight + 36; radius: 12; color: Theme.surface; border.color: Theme.border
+                            RowLayout { anchors.fill: parent; anchors.margins: 18; spacing: 15
+                                Text { text: ok ? "task_alt" : (active ? "pending" : "error"); color: ok ? Theme.green : (active ? Theme.amber : Theme.red); font.family: "Material Symbols Rounded"; font.pixelSize: 30 }
+                                ColumnLayout { id: jobColumn; Layout.fillWidth: true; spacing: 3
+                                    Text { text: (modelData.action || modelData.kind || "job") + "  ·  " + (modelData.serial || ""); color: Theme.text; font.family: "Inter"; font.pixelSize: 16; font.weight: Font.DemiBold }
+                                    Text { text: (modelData.createdAt || "") + (modelData.completedAt ? "  →  " + modelData.completedAt : ""); color: Theme.muted; font.family: "Inter"; font.pixelSize: 12 }
+                                    Text { visible: !!modelData.error; Layout.fillWidth: true; wrapMode: Text.WordWrap; text: modelData.error ? modelData.error.title + ": " + modelData.error.detail : ""; color: Theme.red; font.family: "Inter"; font.pixelSize: 12 }
+                                    Text { visible: !!modelData.log; Layout.fillWidth: true; elide: Text.ElideMiddle; text: modelData.log ? "Log: " + modelData.log : ""; color: Theme.muted; font.family: "Inter"; font.pixelSize: 12 }
+                                }
+                                StatusPill {
+                                    label: ({ "completed": "Concluído", "failed": "Falhou", "interrupted": "Interrompido", "cancelled": "Cancelado", "queued": "Na fila", "running": "Executando" })[modelData.status] || modelData.status
+                                    accent: ok ? Theme.green : (active ? Theme.amber : Theme.red)
+                                }
+                            }
+                        }
+                    }
+                    Text { visible: backend.jobs.length === 0; text: "Nenhuma operação de manutenção registrada."; color: Theme.muted; font.family: "Inter"; font.pixelSize: 15 }
                 }
             }
 

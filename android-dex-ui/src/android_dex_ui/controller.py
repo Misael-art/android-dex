@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -18,6 +19,9 @@ class AppController(QObject):
     messageChanged = Signal()
     maintenanceChanged = Signal()
     jobChanged = Signal()
+    jobsChanged = Signal()
+    streamingChanged = Signal()
+    _streamEvent = Signal("QVariantMap")
 
     def __init__(self, client: AndroidDexClient) -> None:
         super().__init__()
@@ -33,6 +37,59 @@ class AppController(QObject):
         self._poller.setInterval(1250)
         self._poller.timeout.connect(self.pollEvents)
         self._poller.start()
+        self._jobs: list[dict[str, Any]] = []
+        self._streaming = False
+        self._stop_stream = threading.Event()
+        self._streamEvent.connect(self._on_stream_event)
+        self._stream_thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self._stream_thread.start()
+
+    def shutdown(self) -> None:
+        self._stop_stream.set()
+
+    def _stream_loop(self) -> None:
+        """Assina events.subscribe; enquanto conectado, o polling fica ocioso."""
+        while not self._stop_stream.is_set():
+            try:
+                for event in self._client.subscribe(after=self._event_cursor):
+                    if self._stop_stream.is_set():
+                        return
+                    self._streaming = True
+                    self._streamEvent.emit(event)
+            except ClientError:
+                pass
+            except Exception:  # noqa: BLE001 - nunca derrubar a UI por causa do stream
+                pass
+            self._streaming = False
+            self._stop_stream.wait(2.0)
+
+    @Slot("QVariantMap")
+    def _on_stream_event(self, event: dict[str, Any]) -> None:
+        name = event.get("event")
+        if name == "events.heartbeat":
+            self._event_cursor = max(self._event_cursor, int(event.get("cursor", 0)))
+            return
+        self._event_cursor = max(self._event_cursor, int(event.get("seq", self._event_cursor)))
+        self._apply_event(event)
+
+    def _apply_event(self, event: dict[str, Any]) -> None:
+        self._job = event
+        self.jobChanged.emit()
+        if str(event.get("event", "")).startswith("job."):
+            self.refreshJobs()
+
+    @Property("QVariantList", notify=jobsChanged)
+    def jobs(self) -> list[dict[str, Any]]:
+        return list(self._jobs)
+
+    @Slot()
+    def refreshJobs(self) -> None:
+        try:
+            result = self._client.call("job.list", {"limit": 50})
+        except ClientError:
+            return
+        self._jobs = list(result.get("jobs", []))
+        self.jobsChanged.emit()
 
     @Property("QVariantMap", notify=snapshotChanged)
     def snapshot(self) -> dict[str, Any]:
@@ -110,6 +167,7 @@ class AppController(QObject):
             self._selected_serial = devices[0].get("serial", "") if devices else ""
             self.selectedSerialChanged.emit()
         self.snapshotChanged.emit()
+        self.refreshJobs()
 
     @Slot(str)
     def selectDevice(self, serial: str) -> None:
@@ -217,6 +275,8 @@ class AppController(QObject):
 
     @Slot()
     def pollEvents(self) -> None:
+        if self._streaming:
+            return
         try:
             result = self._client.call("events.poll", {"after": self._event_cursor})
         except ClientError:
@@ -225,9 +285,7 @@ class AppController(QObject):
         events = result.get("events", [])
         if not events:
             return
-        latest = events[-1]
-        self._job = latest
-        self.jobChanged.emit()
+        self._apply_event(events[-1])
         if latest.get("event") in {"job.completed", "job.failed"}:
             self._notice(
                 "Operação concluída" if latest.get("event") == "job.completed" else "Operação interrompida",

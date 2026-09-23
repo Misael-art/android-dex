@@ -95,13 +95,13 @@ Arquivo principal: `android-dex-ui/src/android_dex_ui/service.py` (linhas citada
 
 ## Fase 4 — Expansão (P3, só após Fases 1–3)
 
-| ID | Item | Nota |
-|:--|:--|:--|
-| E1 | Streaming de eventos (subscribe) no socket, substituindo polling | usar `protocol.event()` já existente; manter `events.poll` como fallback |
-| E2 | Tabela única de OEM compartilhada entre `_oem()` e `android-dex-kit/profiles/` | elimina cadeia de `if` |
-| E3 | Unidade systemd `--user` para `android-dexd` (socket activation) | |
-| E4 | Tela de histórico de sessões/jobs com logs na UI | depende de T9 |
-| E5 | Empacotamento Flatpak / AUR | |
+| ID | Item | Status | Nota |
+|:--|:--|:--|:--|
+| E1 | Streaming de eventos (subscribe) no socket, substituindo polling | DONE | `events.subscribe` + heartbeat; `events.poll` mantido como fallback |
+| E2 | Tabela única de OEM compartilhada entre `_oem()` e `android-dex-kit/profiles/` | DONE | `oem.py`; teste de paridade com o kit |
+| E3 | Unidade systemd `--user` para `android-dexd` (socket activation) | DONE | `android-dex-ui/systemd/` |
+| E4 | Tela de histórico de sessões/jobs com logs na UI | DONE | tela Sessões + `job.list` |
+| E5 | Empacotamento Flatpak / AUR | DONE (AUR) | PKGBUILD em `packaging/aur/`; Flatpak descartado (precisa de adb/scrcpy/udev do host) |
 
 ---
 
@@ -113,6 +113,6 @@ Arquivo principal: `android-dex-ui/src/android_dex_ui/service.py` (linhas citada
 | 1 | T1 T2 T3 T4 | DONE |
 | 2 | T5 T6 T7 T8 T9 | DONE |
 | 3 | T10 T11 T12 T13 | DONE |
-| 4 | E1–E5 | TODO |
+| 4 | E1–E5 | DONE |
 
 **Definição de pronto global:** todas as fases 0–3 `DONE`, CI verde, `CHANGELOG.md` atualizado, release `v0.1.3`.

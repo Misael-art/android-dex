@@ -1,0 +1,22 @@
+[Unit]
+Description=Android-DEX — serviço local (JSON-RPC allowlisted)
+Documentation=https://github.com/Misael-art/android-dex
+Requires=android-dexd.socket
+After=android-dexd.socket
+
+[Service]
+Type=simple
+# Instalado por `pip install --user ./android-dex-ui` (ou pipx).
+ExecStart=%h/.local/bin/android-dexd
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=20
+# Endurecimento compatível com um serviço de usuário que chama adb/scrcpy.
+NoNewPrivileges=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+Also=android-dexd.socket

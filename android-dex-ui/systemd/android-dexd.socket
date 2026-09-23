@@ -1,0 +1,13 @@
+[Unit]
+Description=Android-DEX — socket local do serviço android-dexd
+Documentation=https://github.com/Misael-art/android-dex
+
+[Socket]
+# Mesmo caminho de paths.socket_path(): $XDG_RUNTIME_DIR/android-dex/core.sock
+ListenStream=%t/android-dex/core.sock
+SocketMode=0600
+DirectoryMode=0700
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

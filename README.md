@@ -128,6 +128,16 @@ gh release download -R Misael-art/android-dex -p 'SHA256SUMS' && sha256sum -c SH
 > ao executar o AppImage — aceite-o, ou rode com `APPIMAGELAUNCHER_DISABLE=1` para
 > pular a interação. O AppImage usa FUSE; sem FUSE, rode com `--appimage-extract-and-run`.
 
+### Arch Linux / Manjaro (PKGBUILD)
+
+O pacote junta os três projetos (kit, flash e UI) e a unidade systemd de usuário:
+
+```bash
+git clone https://github.com/Misael-art/android-dex.git
+cd android-dex/packaging/aur && makepkg -si
+systemctl --user enable --now android-dexd.socket   # opcional: serviço sob demanda
+```
+
 ### B) A partir do código-fonte
 
 ```bash

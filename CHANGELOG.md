@@ -3,6 +3,25 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/);
 versionamento [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.1.4] — 2026-09-22
+
+### android-dex-ui
+- **Eventos em tempo real** (`events.subscribe`): conexão persistente com
+  notificações JSON-RPC ordenadas por `seq` e heartbeat de 15 s. A UI assina
+  automaticamente e volta ao `events.poll` se a conexão cair.
+- **Histórico de manutenção** na tela Sessões (novo método `job.list`): status,
+  horários, erro e caminho do log de cada job. Sessões mostram `stop-failed`
+  e permitem tentar encerrar de novo.
+- **Tabela única de OEM** (`oem.py`) para driver do flash e perfil desktop;
+  um teste compara com `normalize_profile_key` do kit e falha se divergirem.
+- **systemd de usuário com socket activation** (`systemd/android-dexd.{socket,service}`);
+  o serviço aceita o socket herdado (`LISTEN_FDS`).
+
+### Empacotamento
+- **PKGBUILD** para Arch/Manjaro em `packaging/aur/` (kit + flash + UI + unidades).
+- Flatpak avaliado e **não adotado**: o fluxo depende de `adb`/`scrcpy`/udev do
+  host e acesso USB amplo, o que anula o sandbox. AppImage + PKGBUILD cobrem o uso.
+
 ## [0.1.3] — 2026-09-22
 
 ### android-dex-ui — robustez do serviço `android-dexd`

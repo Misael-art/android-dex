@@ -21,7 +21,7 @@ test: syntax
 	bash tests/run.sh
 
 syntax:
-	bash -n $(SCRIPTS)
+	bash -n $(SCRIPTS) packaging/aur/PKGBUILD
 
 lint:
 	shellcheck -x -e SC1090,SC1091 $(SCRIPTS)
